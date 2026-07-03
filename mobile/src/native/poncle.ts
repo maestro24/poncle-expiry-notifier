@@ -1,0 +1,47 @@
+/**
+ * Bridge to the native `Poncle` Capacitor plugin (Kotlin). All Poncle network
+ * access goes NATIVE, for two reasons:
+ *   1. CORS: m.poncle.co.kr sends no CORS headers, so a WebView fetch is blocked.
+ *      A native HttpURLConnection/OkHttp request has no origin and is not blocked.
+ *   2. Cookies: the customer's real login session lives in the native WebView
+ *      CookieManager (set during the in-app login), and the native request reuses
+ *      those cookies (exactly like the PC app's requests.Session did).
+ *
+ * The plugin exposes a tiny surface; all paging / expiry logic stays in TS so it
+ * is unit-testable against a fake bridge (see poncle-client.ts / its test).
+ */
+import { registerPlugin } from "@capacitor/core";
+import type { PoncleRow } from "../domain/types";
+
+export interface ListOpenResult {
+  /** True when the response was real data JSON; false when Poncle answered with
+   *  the login page (session expired). */
+  ok: boolean;
+  total: number;
+  list: PoncleRow[];
+}
+
+export interface PonclePlugin {
+  /** Launch the in-app WebView login. Resolves when a valid session cookie is
+   *  captured (ok=true) or the user cancels (ok=false). */
+  login(options?: { baseUrl?: string }): Promise<{ ok: boolean }>;
+  /** Clear the stored Poncle cookies (사용자 로그아웃). */
+  logout(options?: { baseUrl?: string }): Promise<void>;
+  /** True if cookies are currently stored (not necessarily still valid). */
+  hasSession(options?: { baseUrl?: string }): Promise<{ value: boolean }>;
+  /** Probe /open/listOpen with scale=1; true if it returns data right now. */
+  check(options?: { baseUrl?: string }): Promise<{ value: boolean }>;
+  /** One authenticated GET /open/listOpen with the given query params. */
+  listOpen(options: { baseUrl?: string; params: Record<string, string> }): Promise<ListOpenResult>;
+}
+
+export const Poncle = registerPlugin<PonclePlugin>("Poncle", {
+  // Web fallback (browser preview / vitest): no native session, everything empty.
+  web: async () => ({
+    login: async () => ({ ok: false }),
+    logout: async () => undefined,
+    hasSession: async () => ({ value: false }),
+    check: async () => ({ value: false }),
+    listOpen: async () => ({ ok: false, total: 0, list: [] as PoncleRow[] }),
+  }),
+});

@@ -1,0 +1,17 @@
+# Node / Vite
+node_modules/
+dist/
+*.log
+
+# Capacitor copies web assets into the native project on sync
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json
+
+# Build outputs / local machine config
+android/build/
+android/app/build/
+android/.gradle/
+android/local.properties
+android/capacitor-cordova-android-plugins/
+.gradle/
