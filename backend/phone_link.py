@@ -141,6 +141,19 @@ class PhoneLink:
             return None
         return f"http://{self._ip}:{self.port}/p/{self.token}"
 
+    def qr_data_url(self) -> Optional[str]:
+        url = self.connect_url()
+        if not url:
+            return None
+        import base64
+        import io
+        import qrcode
+        img = qrcode.make(url)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        return "data:image/png;base64," + b64
+
     # -- request handling ---------------------------------------------------
     def _handle_get(self, h: BaseHTTPRequestHandler) -> None:
         parsed = urllib.parse.urlparse(h.path)

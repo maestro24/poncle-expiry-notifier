@@ -4,6 +4,7 @@
 pywebview==5.3.2        # native desktop window that renders the HTML/CSS/JS UI (uses Edge WebView2 on Windows)
 pystray==0.19.5         # system tray icon
 Pillow==10.4.0          # tray icon image + generate .ico
+qrcode==7.4.2           # QR for phone-link pairing (uses Pillow, already present)
 requests==2.32.3        # HTTP scraping with the reused Poncle session cookies
 APScheduler==3.10.4     # daily scheduled scan
 # Bundled for its runtime DLLs (winrt\\MSVCP140.dll etc.): the GitHub Actions

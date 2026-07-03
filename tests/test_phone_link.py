@@ -79,3 +79,8 @@ class TestServer(unittest.TestCase):
         self.assertIn(self.link.token, body)     # token injected
         self.assertIn("/pending?token=", body)   # polls the endpoint
         self.assertIn("sms:", body)              # opens the SMS app
+
+    def test_qr_data_url(self):
+        d = self.link.qr_data_url()
+        self.assertTrue(d.startswith("data:image/png;base64,"))
+        self.assertGreater(len(d), 200)
