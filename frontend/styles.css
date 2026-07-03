@@ -199,6 +199,21 @@ textarea.mono{font-family:ui-monospace,'Cascadia Code',Consolas,monospace;font-s
 .modal-progress{font-size:12.5px;font-weight:600;color:var(--info)}
 .modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:2px}
 
+/* ---------- phone link card ---------- */
+.phone-card{display:flex;gap:16px;align-items:center;justify-content:space-between;
+  background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);
+  padding:14px 16px;margin-bottom:16px}
+.phone-info{display:flex;flex-direction:column;gap:6px}
+.phone-info b{font-size:14px}
+.phone-pill{display:inline-flex;align-items:center;gap:7px;padding:4px 11px;border-radius:999px;
+  background:var(--skip-bg);border:1px solid var(--border);font-size:12px;font-weight:600;
+  color:var(--skip-ink);width:fit-content}
+.phone-pill .dot{width:8px;height:8px;border-radius:50%;background:var(--muted-2)}
+.phone-pill.is-on{background:var(--ok-bg);border-color:var(--ok-border);color:var(--ok)}
+.phone-pill.is-on .dot{background:var(--ok)}
+.phone-qr{width:120px;height:120px;flex:0 0 120px;border-radius:10px;background:#fff;
+  border:1px solid var(--border)}
+
 /* scrollbars */
 ::-webkit-scrollbar{width:10px;height:10px}
 ::-webkit-scrollbar-thumb{background:#D4D4D8;border-radius:6px;border:2px solid var(--bg)}

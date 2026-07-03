@@ -136,6 +136,24 @@ async function sendAlert(item, btn) {
   }
 }
 
+/* ---------- phone link ---------- */
+let PHONE_TIMER = null;
+async function refreshPhoneStatus() {
+  const st = await call("get_phone_status");
+  const card = $("#phone-card");
+  if (!st || !st.available) { card.classList.add("hidden"); return; }
+  card.classList.remove("hidden");
+  if (st.qr) $("#phone-qr").src = st.qr;
+  const on = !!st.connected;
+  $("#phone-pill").className = "phone-pill " + (on ? "is-on" : "");
+  $("#phone-stat").textContent = on ? "연결됨" : "대기중";
+}
+function startPhonePolling() {
+  refreshPhoneStatus();
+  if (PHONE_TIMER) clearInterval(PHONE_TIMER);
+  PHONE_TIMER = setInterval(refreshPhoneStatus, 3000);
+}
+
 /* ---------- views ---------- */
 function showView(name) {
   ["main", "history", "settings"].forEach((v) =>
@@ -396,6 +414,7 @@ async function runInit() {
     recomputeCards();
     renderDeliverHint();
   }
+  startPhonePolling();
 }
 
 async function bootReal() {
@@ -441,6 +460,7 @@ function mock(method, args) {
     }];
   }
   if (method === "send_alert") return { status: "sent" };
+  if (method === "get_phone_status") return { available: false, connected: false, qr: null };
   if (method === "save_settings") return { status: "ok", settings: (args && args[0]) || mockSettings() };
   if (method === "check_update") return { status: "ok", available: false, version: "1.2.0", current: "1.2.0", notes: "" };
   if (method === "apply_update") return { status: "downloading" };

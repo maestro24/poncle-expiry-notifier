@@ -45,6 +45,15 @@
       <button class="btn btn-warn" id="btn-login">폰클 로그인</button>
     </div>
 
+    <div id="phone-card" class="phone-card hidden">
+      <div class="phone-info">
+        <b>폰 연결</b>
+        <span class="phone-pill" id="phone-pill"><span class="dot"></span><span id="phone-stat">대기중</span></span>
+        <p class="hint">폰 카메라로 QR을 스캔해 연결하세요. 같은 Wi-Fi여야 합니다. 연결 후 “알림 보내기”를 누르면 폰 문자앱에 자동으로 채워집니다.</p>
+      </div>
+      <img id="phone-qr" class="phone-qr" alt="연결 QR" />
+    </div>
+
     <div class="cards">
       <div class="card"><div class="card-label">대상자 수</div><div class="card-num" id="c-targets">0</div></div>
       <div class="card card-warn"><div class="card-label">미발송</div><div class="card-num" id="c-pending">0</div></div>
