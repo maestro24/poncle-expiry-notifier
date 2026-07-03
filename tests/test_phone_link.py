@@ -72,3 +72,10 @@ class TestServer(unittest.TestCase):
     def test_connect_url_shape(self):
         url = self.link.connect_url()
         self.assertRegex(url, r"^http://[\d.]+:\d+/p/[0-9a-f]{32}$")
+
+    def test_phone_page_has_token_and_poll(self):
+        st, body = self._get(f"/p/{self.link.token}")
+        self.assertEqual(st, 200)
+        self.assertIn(self.link.token, body)     # token injected
+        self.assertIn("/pending?token=", body)   # polls the endpoint
+        self.assertIn("sms:", body)              # opens the SMS app

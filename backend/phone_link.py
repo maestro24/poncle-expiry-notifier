@@ -53,8 +53,39 @@ class CommandQueue:
 
 _HEARTBEAT_WINDOW_SEC = 5.0
 
-# Filled in Task 3; a valid page so the server works standalone until then.
-_PHONE_PAGE = "<!doctype html><meta charset=utf-8><title>폰 연결</title><body>연결됨</body>"
+_PHONE_PAGE = """<!doctype html>
+<html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>약정만료 알리미 - 폰 연결</title>
+<style>
+ body{font-family:-apple-system,'Malgun Gothic',sans-serif;margin:0;padding:32px 20px;
+      background:#F4F4F5;color:#18181B;text-align:center}
+ .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px;vertical-align:middle}
+ .on{background:#16A34A}.off{background:#DC2626}
+ h1{font-size:18px;margin:8px 0 4px}.sub{color:#71717A;font-size:13px}
+ .last{margin-top:24px;padding:14px;border:1px solid #E4E4E7;border-radius:12px;background:#fff;
+       font-size:13px;color:#52525B;min-height:20px}
+</style></head><body>
+<h1><span id="dot" class="dot off"></span><span id="stat">연결 중...</span></h1>
+<p class="sub">이 화면을 켜 두면 PC에서 보낸 문자가 자동으로 문자앱에 채워집니다.</p>
+<div class="last" id="last">대기 중</div>
+<script>
+ var T="__TOKEN__";
+ function setStat(ok){document.getElementById('dot').className='dot '+(ok?'on':'off');
+   document.getElementById('stat').textContent=ok?'연결됨':'연결 끊김';}
+ function poll(){
+   fetch('/pending?token='+T,{cache:'no-store'})
+     .then(function(r){return r.json();})
+     .then(function(j){setStat(true);
+       if(j&&j.phone){
+         document.getElementById('last').textContent='전송: '+j.phone;
+         location.href='sms:'+j.phone.replace(/\\D/g,'')+'?body='+encodeURIComponent(j.text||'');
+       }})
+     .catch(function(){setStat(false);})
+     .then(function(){setTimeout(poll,1000);});
+ }
+ poll();
+</script></body></html>"""
 
 
 class PhoneLink:
