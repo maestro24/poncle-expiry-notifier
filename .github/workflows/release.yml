@@ -1,0 +1,58 @@
+name: Build & Release
+
+# Push a tag like v1.3.0 to build the onefile exe and publish it as a GitHub
+# Release. The app's self-updater reads this release (latest) and offers it to
+# users. The tag MUST match backend/__init__.py __version__ (checked below), or
+# clients would be prompted to "update" to a build that reports the same version.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # create releases + upload assets in THIS repo (GITHUB_TOKEN)
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pythonnet
+
+      - name: Verify tag matches __version__
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver="$(python -c "from backend import __version__; print(__version__)")"
+          echo "tag=$tag  __version__=$ver"
+          if [ "$tag" != "$ver" ]; then
+            echo "::error::Tag ($tag) does not match backend/__init__.py __version__ ($ver). Bump __version__ first."
+            exit 1
+          fi
+
+      - name: Build exe
+        run: python build.py
+
+      - name: Stage ASCII-named asset
+        shell: bash
+        run: cp "dist/약정만료 알리미.exe" "dist/PoncleExpiryNotifier.exe"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/PoncleExpiryNotifier.exe" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
