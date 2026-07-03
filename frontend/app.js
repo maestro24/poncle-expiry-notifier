@@ -242,6 +242,7 @@ function populateSettings(s) {
   $("#s-autoupdate").checked = s.auto_check_updates !== false;
   $("#s-current-ver").textContent = $("#app-version").textContent || "-";
   $("#s-template").value = s.message_template || "";
+  $("#s-template-nonstandard").value = s.message_template_nonstandard || "";
   renderDeliverHint();
 }
 
@@ -267,6 +268,7 @@ function gatherSettings() {
     autostart_enabled: $("#s-autostart").checked,
     auto_check_updates: $("#s-autoupdate").checked,
     message_template: $("#s-template").value,
+    message_template_nonstandard: $("#s-template-nonstandard").value,
   };
 }
 
@@ -450,6 +452,7 @@ function mockSettings() {
     agency_term_months: {}, notify_offsets_days: [0], run_time: "09:00",
     run_on_startup: true, autostart_enabled: false, auto_check_updates: true,
     message_template: "안녕하세요 {customer}님. {telecom} 휴대폰({model}) 2년 약정이 {expiry}에 만료됩니다.",
+    message_template_nonstandard: "안녕하세요 {customer}님. {telecom}({model}) 약정이 {expiry}에 만료됩니다.",
   };
 }
 function mockResults() {

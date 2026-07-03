@@ -76,10 +76,14 @@ def normalize_agency(name: str) -> str:
     return s
 
 
+def is_standard_open_type(openhow: str) -> bool:
+    """True for 기변/신규 (표준 약정 + 표준 문자). 정확 매칭이라 유심신규는 False."""
+    return str(openhow or "").strip() in STANDARD_OPEN_TYPES
+
+
 def resolve_term_months(row: dict[str, Any], config: dict[str, Any]) -> int:
     """개통유형 기변/신규 -> 표준 약정. 그 외 -> 거래처별 값(없으면 비표준 기본)."""
-    openhow = _field(row, "openhowx").strip()
-    if openhow in STANDARD_OPEN_TYPES:
+    if is_standard_open_type(_field(row, "openhowx")):
         return int(config.get("default_term_months", 24))
 
     agency = normalize_agency(_field(row, "agencytitle"))

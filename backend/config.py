@@ -46,12 +46,19 @@ DEFAULTS: dict[str, Any] = {
     # Check GitHub Releases for a newer build on startup and prompt to install.
     "auto_check_updates": True,
 
-    # Outbound message sent TO the customer. Placeholders: {customer} {telecom}
-    # {model} {expiry} {opendate} {when} (also available: {phone} {agency} {plan}).
+    # Outbound message sent TO the customer. Two templates, chosen by 개통유형 the
+    # same way the term is: 기변/신규 use message_template, everything else
+    # (번호이동/유심신규/유심MNP) uses message_template_nonstandard.
+    # Placeholders: {customer} {telecom} {model} {expiry} {opendate} {when}
+    # (also available: {phone} {agency} {plan}).
     "message_template": (
         "안녕하세요 {customer}님. 사용 중이신 {telecom} 휴대폰({model})의 "
         "2년 약정이 {expiry}에 만료됩니다. 기기변경/요금제 상담 원하시면 "
         "편하게 연락 주세요."
+    ),
+    "message_template_nonstandard": (
+        "안녕하세요 {customer}님. {telecom}({model}) 약정이 {expiry}에 "
+        "만료됩니다. 재약정/번호이동/요금제 상담 원하시면 편하게 연락 주세요."
     ),
 
     # Master switch for ACTUALLY sending the message to customers. When False,

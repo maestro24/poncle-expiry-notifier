@@ -7,7 +7,9 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.expiry import (add_months, candidate_open_dates, compute_expiry,
-                            due_milestones, parse_opendate, resolve_term_months)
+                            due_milestones, is_standard_open_type, parse_opendate,
+                            resolve_term_months)
+from backend.notifier import template_for_row
 
 CFG = {"default_term_months": 24, "nonstandard_term_months": 6,
        "agency_term_months": {}, "notify_offsets_days": [0]}
@@ -102,6 +104,33 @@ class TestTermResolution(unittest.TestCase):
         cfg = dict(CFG, agency_term_months={"CD대리점": 0})
         row = {"opendate": "24-06-15", "openhowx": "번호이동", "agencytitle": "CD대리점"}
         self.assertIsNone(compute_expiry(row, cfg))
+
+
+class TestOpenTypeClassification(unittest.TestCase):
+    def test_standard(self):
+        self.assertTrue(is_standard_open_type("기변"))
+        self.assertTrue(is_standard_open_type("신규"))
+
+    def test_nonstandard(self):
+        for t in ("번호이동", "유심신규", "유심MNP", ""):
+            self.assertFalse(is_standard_open_type(t))
+
+
+class TestTemplateSelection(unittest.TestCase):
+    CFG = {"message_template": "STD", "message_template_nonstandard": "NON"}
+
+    def test_standard_types_use_standard_template(self):
+        self.assertEqual(template_for_row(self.CFG, {"openhowx": "기변"}), "STD")
+        self.assertEqual(template_for_row(self.CFG, {"openhowx": "신규"}), "STD")
+
+    def test_nonstandard_types_use_nonstandard_template(self):
+        self.assertEqual(template_for_row(self.CFG, {"openhowx": "번호이동"}), "NON")
+        self.assertEqual(template_for_row(self.CFG, {"openhowx": "유심MNP"}), "NON")
+        self.assertEqual(template_for_row(self.CFG, {"openhowx": "유심신규"}), "NON")
+
+    def test_empty_nonstandard_falls_back_to_standard(self):
+        cfg = {"message_template": "STD", "message_template_nonstandard": ""}
+        self.assertEqual(template_for_row(cfg, {"openhowx": "번호이동"}), "STD")
 
 
 class TestCandidateDates(unittest.TestCase):

@@ -115,8 +115,13 @@
       </div>
 
       <div class="field">
-        <label>문자 내용 <span class="muted">(고객에게 보낼 메시지)</span></label>
+        <label>문자 내용 · 기변/신규</label>
         <textarea id="s-template" rows="3"></textarea>
+      </div>
+
+      <div class="field">
+        <label>문자 내용 · 번호이동/유심 <span class="muted">(그 외 유형)</span></label>
+        <textarea id="s-template-nonstandard" rows="3"></textarea>
         <p class="hint">사용 가능 변수: {customer} {telecom} {model} {expiry} {opendate} {when}</p>
       </div>
 
