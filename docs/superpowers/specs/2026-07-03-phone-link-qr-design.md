@@ -89,6 +89,22 @@ send. Message goes out from the owner's real number.
 - Windows Firewall prompts once (Private network) on first bind; if denied, the
   phone cannot connect — the UI explains how to allow it.
 
+### Remote mode (Cloudflare quick tunnel) — added 2026-07-04
+
+For when PC and phone are not on the same LAN (PC on Ethernet, phone on LTE). A
+toggle brings up a Cloudflare quick tunnel (`cloudflared`) exposing the same
+token-gated server over a random `https://<random>.trycloudflare.com` URL.
+
+- The 128-bit session token is the sole gate and is enforced with a constant-time
+  compare on BOTH routes (`/p/<token>`, `/pending?token=`); no route returns the
+  page or customer data without it. The tunnel targets only `127.0.0.1:<phone-port>`.
+- `cloudflared` is downloaded from a PINNED release tag and verified by SHA-256
+  before it is executed (rejects a substituted/tampered binary).
+- Privacy: when remote is ON, customer name + phone transit Cloudflare's edge
+  (TLS to the edge, but Cloudflare terminates it). This is disclosed in the toggle
+  hint; local mode (same LAN) keeps data off the internet and is the default.
+- The tunnel is outbound, so no inbound firewall rule is needed.
+
 ## Error handling
 
 - deliver ON + phone NOT connected + 알림 보내기 -> do not send, do not record;

@@ -3,6 +3,7 @@ next customer SMS command to open in the phone's Messages app. HTTP short-pollin
 stdlib only. Plain HTTP on a trusted LAN by design (see the phone-link spec)."""
 from __future__ import annotations
 
+import hmac
 import json as _json
 import re as _re
 import secrets
@@ -199,13 +200,15 @@ class PhoneLink:
     def _handle_get(self, h: BaseHTTPRequestHandler) -> None:
         parsed = urllib.parse.urlparse(h.path)
         path = parsed.path
-        if path == f"/p/{self.token}":
+        # Constant-time token checks: over the Cloudflare tunnel the token is the
+        # entire security boundary, so compare it without an early-exit byte diff.
+        if path.startswith("/p/") and hmac.compare_digest(path[len("/p/"):], self.token):
             page = _PHONE_PAGE.replace("__TOKEN__", self.token)
             self._respond(h, 200, "text/html; charset=utf-8", page.encode("utf-8"))
             return
         if path == "/pending":
             qs = urllib.parse.parse_qs(parsed.query)
-            if qs.get("token", [""])[0] != self.token:
+            if not hmac.compare_digest(qs.get("token", [""])[0], self.token):
                 self._respond(h, 403, "application/json", b'{"error":"forbidden"}')
                 return
             self._last_poll = time.time()

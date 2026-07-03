@@ -25,10 +25,14 @@ from typing import Optional
 
 from .paths import data_dir
 
-# Official Windows build of cloudflared (amd64).
+# Official Windows build of cloudflared (amd64), pinned to a known version + hash.
+# The binary is downloaded AND executed, so we pin the release tag (reproducible)
+# and verify SHA-256 before running (rejects a substituted/tampered download).
+_CF_VERSION = "2026.6.1"
+_SHA256 = "5253e66f1f493c4e13539749f1aa86fd0c61e3072900fec29a44ba046a6d97e2"
 _DOWNLOAD_URL = (
-    "https://github.com/cloudflare/cloudflared/releases/latest/download/"
-    "cloudflared-windows-amd64.exe"
+    "https://github.com/cloudflare/cloudflared/releases/download/"
+    f"{_CF_VERSION}/cloudflared-windows-amd64.exe"
 )
 _MIN_BINARY_BYTES = 5_000_000  # a real cloudflared build is ~40MB
 _URL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
@@ -47,10 +51,21 @@ def parse_tunnel_url(text: str) -> Optional[str]:
     return m.group(0) if m else None
 
 
+def _sha256(path: Path) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def ensure_binary() -> Path:
-    """Return the cached cloudflared path, downloading it on first use."""
+    """Return the cached cloudflared path, downloading + verifying on first use.
+
+    Refuses to return a binary whose SHA-256 does not match the pinned build."""
     dst = binary_path()
-    if dst.exists() and dst.stat().st_size >= _MIN_BINARY_BYTES:
+    if dst.exists() and dst.stat().st_size >= _MIN_BINARY_BYTES and _sha256(dst) == _SHA256:
         return dst
     tmp = dst.with_suffix(".part")
     req = urllib.request.Request(_DOWNLOAD_URL, headers={"User-Agent": "PoncleExpiryNotifier"})
@@ -63,6 +78,9 @@ def ensure_binary() -> Path:
     if tmp.stat().st_size < _MIN_BINARY_BYTES:
         tmp.unlink(missing_ok=True)
         raise OSError("cloudflared download too small; aborting")
+    if _sha256(tmp) != _SHA256:
+        tmp.unlink(missing_ok=True)
+        raise OSError("cloudflared checksum mismatch; refusing to run")
     tmp.replace(dst)
     return dst
 
@@ -74,15 +92,18 @@ class Tunnel:
         self._proc: Optional[subprocess.Popen] = None
         self._url: Optional[str] = None
         self._lock = threading.Lock()
+        self._stopped = False
         self.error: Optional[str] = None
 
     def start(self, local_port: int) -> None:
         """Download cloudflared if needed, spawn the tunnel, and read its output
         on a background thread until the public URL appears. Non-blocking on the
         URL: poll `public_url()` / `is_ready()`."""
-        if self._proc is not None:
+        if self._proc is not None or self._stopped:
             return
-        exe = ensure_binary()
+        exe = ensure_binary()  # may take a while (download); check for cancel after
+        if self._stopped:
+            return
         self._proc = subprocess.Popen(
             [str(exe), "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{local_port}"],
             stdout=subprocess.PIPE,
@@ -117,6 +138,7 @@ class Tunnel:
         return self.public_url() is not None
 
     def stop(self) -> None:
+        self._stopped = True  # cancels an in-flight start() before it spawns
         proc = self._proc
         self._proc = None
         with self._lock:
@@ -124,5 +146,9 @@ class Tunnel:
         if proc is not None:
             try:
                 proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except Exception:
+                    proc.kill()
             except Exception:
                 pass
