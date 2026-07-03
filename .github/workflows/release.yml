@@ -16,6 +16,12 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
+    env:
+      # The app name (약정만료 알리미) is Korean; the runner's default console code
+      # page is cp1252, so build.py's print() would hit UnicodeEncodeError. Force
+      # Python into UTF-8 mode for every step.
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
     steps:
       - uses: actions/checkout@v4
 
