@@ -10,6 +10,14 @@ tmp_ret = collect_all('webview')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('pystray')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+# windows_toasts/winsdk are NOT used by app code, but collect_all('winsdk') ships
+# runtime DLLs (winrt\\MSVCP140.dll etc.) that the GitHub-Actions setup-python
+# build of python312.dll needs to load on client Windows. Removing them made the
+# CI-built exe crash with "Failed to load Python DLL" (v1.2.6). Keep them bundled.
+tmp_ret = collect_all('windows_toasts')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('winsdk')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(

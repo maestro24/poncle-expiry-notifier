@@ -6,3 +6,7 @@ pystray==0.19.5         # system tray icon
 Pillow==10.4.0          # tray icon image + generate .ico
 requests==2.32.3        # HTTP scraping with the reused Poncle session cookies
 APScheduler==3.10.4     # daily scheduled scan
+# Bundled for its runtime DLLs (winrt\\MSVCP140.dll etc.): the GitHub Actions
+# setup-python build of python312.dll needs them to load on client Windows, and
+# collect_all('winsdk') is what ships them. Not imported by app code anymore.
+windows-toasts==1.3.0
