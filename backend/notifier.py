@@ -17,7 +17,8 @@ def template_for_row(config: dict[str, Any], row: dict[str, Any]) -> str:
     그 외 (번호이동/유심 등) -> message_template_nonstandard (falls back to the
     standard template if the non-standard one is empty)."""
     standard = config.get("message_template", "")
-    if is_standard_open_type(row.get("openhowx", "")):
+    open_type = row.get("openhowx") or row.get("openhow") or ""
+    if is_standard_open_type(open_type):
         return standard
     return config.get("message_template_nonstandard", "") or standard
 
