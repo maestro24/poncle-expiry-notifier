@@ -172,11 +172,68 @@ function renderDeliverHint() {
   el.className = "deliver-hint " + (on ? "deliver-on" : "deliver-off");
 }
 
+// Known 거래처 (from Poncle's agency dropdown), decoded. Non-standard open types
+// (번호이동/유심 등) use a per-agency term; these are pre-listed so they can be set.
+const AGENCIES = [
+  "CD대리점", "DMB 엘지", "M&S분당도매센터", "MCC - 스테이지파이브SK", "MCC- SK텔링크",
+  "MCC- 엠모바일", "MCC-KT엠모바일 후불유심", "mcc-kt중고후불", "MCC-미디어로그후불",
+  "MCC-스카이라이프", "MCC-스테이지파이브KT", "MCC-코드모바일KT", "MCC-코드모바일LG",
+  "MCC-프리티KT", "MCC-프리티LG", "MCC-프리티SK", "MCC-헬로비젼LG", "MCC/SK후불", "MCCKT",
+  "PS&M", "SK경승컴퍼니온라인", "광운통신(라우터)", "대산LG", "메타레이kt", "미디어원KT",
+  "쇼플러스", "유니컴즈(모빙) KT", "유니컴즈(모빙)LGT", "유니컴즈(모빙)SK", "유안-엔네트웍스",
+  "티인포(mcc)",
+];
+
+function decodeHtml(s) {
+  const t = document.createElement("textarea");
+  t.innerHTML = String(s ?? "");
+  return t.value;
+}
+
+// The known agencies plus any extra 거래처 seen in the current scan results, so a
+// real data agency is always editable even if it is not in the built-in list.
+function agencyList() {
+  const seen = new Set(AGENCIES);
+  const extra = [];
+  for (const r of RESULTS) {
+    const name = decodeHtml(r.agency || "").trim();
+    if (name && !seen.has(name)) { seen.add(name); extra.push(name); }
+  }
+  extra.sort((a, b) => a.localeCompare(b, "ko"));
+  return AGENCIES.concat(extra);
+}
+
+function buildAgencyTerms(s) {
+  const box = $("#agency-terms");
+  box.innerHTML = "";
+  const overrides = s.agency_term_months || {};
+  const fallback = s.nonstandard_term_months ?? 6;
+  for (const name of agencyList()) {
+    const row = document.createElement("div");
+    row.className = "agency-row";
+    const label = document.createElement("span");
+    label.className = "agency-name";
+    label.textContent = name;
+    const input = document.createElement("input");
+    input.type = "number";
+    input.min = "0";
+    input.max = "60";
+    input.className = "agency-term";
+    input.dataset.agency = name;
+    input.value = (name in overrides) ? overrides[name] : fallback;
+    row.appendChild(label);
+    row.appendChild(input);
+    box.appendChild(row);
+  }
+}
+
 function populateSettings(s) {
   if (!s) return;
   SETTINGS = s;
   $("#s-deliver").checked = !!s.deliver_alerts;
-  $("#s-term").value = s.default_term_months ?? 24;
+  $("#s-standard-term").value = s.default_term_months ?? 24;
+  $("#s-nonstandard-term").value = s.nonstandard_term_months ?? 6;
+  buildAgencyTerms(s);
   const offsets = new Set((s.notify_offsets_days || []).map(String));
   $$(".s-offset").forEach((cb) => { cb.checked = offsets.has(cb.value); });
   $("#s-runtime").value = s.run_time || "09:00";
@@ -185,29 +242,31 @@ function populateSettings(s) {
   $("#s-autoupdate").checked = s.auto_check_updates !== false;
   $("#s-current-ver").textContent = $("#app-version").textContent || "-";
   $("#s-template").value = s.message_template || "";
-  $("#s-overrides").value = JSON.stringify(s.term_overrides || [], null, 0);
   renderDeliverHint();
 }
 
 function gatherSettings() {
   const offsets = $$(".s-offset").filter((cb) => cb.checked).map((cb) => parseInt(cb.value, 10));
-  let overrides;
-  try {
-    overrides = JSON.parse($("#s-overrides").value || "[]");
-    if (!Array.isArray(overrides)) throw new Error("must be an array");
-  } catch (e) {
-    return { _error: "약정 예외 규칙 JSON 형식이 올바르지 않습니다: " + e.message };
-  }
+  const nonstandard = parseInt($("#s-nonstandard-term").value, 10);
+  const nonstandardTerm = Number.isFinite(nonstandard) ? nonstandard : 6;
+  // Only store agencies whose term differs from the non-standard default, so the
+  // default can still propagate to unset agencies.
+  const agencyTerms = {};
+  $$(".agency-term").forEach((inp) => {
+    const v = parseInt(inp.value, 10);
+    if (Number.isFinite(v) && v !== nonstandardTerm) agencyTerms[inp.dataset.agency] = v;
+  });
   return {
     deliver_alerts: $("#s-deliver").checked,
-    default_term_months: parseInt($("#s-term").value, 10) || 24,
+    default_term_months: parseInt($("#s-standard-term").value, 10) || 24,
+    nonstandard_term_months: nonstandardTerm,
+    agency_term_months: agencyTerms,
     notify_offsets_days: offsets.length ? offsets : [0],
     run_time: $("#s-runtime").value || "09:00",
     run_on_startup: $("#s-startup").checked,
     autostart_enabled: $("#s-autostart").checked,
     auto_check_updates: $("#s-autoupdate").checked,
     message_template: $("#s-template").value,
-    term_overrides: overrides,
   };
 }
 
@@ -387,10 +446,10 @@ function mock(method, args) {
 }
 function mockSettings() {
   return {
-    deliver_alerts: false, default_term_months: 24, notify_offsets_days: [0], run_time: "09:00",
+    deliver_alerts: false, default_term_months: 24, nonstandard_term_months: 6,
+    agency_term_months: {}, notify_offsets_days: [0], run_time: "09:00",
     run_on_startup: true, autostart_enabled: false, auto_check_updates: true,
     message_template: "안녕하세요 {customer}님. {telecom} 휴대폰({model}) 2년 약정이 {expiry}에 만료됩니다.",
-    term_overrides: [],
   };
 }
 function mockResults() {

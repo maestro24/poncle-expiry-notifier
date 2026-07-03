@@ -6,9 +6,9 @@ A Poncle row (from /open/listOpen) has, among others:
     telecomx  : "SK텔레콤" | "U+알뜰모바일" | ...
     plan, agencytitle, customer, openphone, model, membername, ...
 
-Expiry = opendate + term_months, where term_months is the default (24) unless a
-configured override matches the row. A resolved term of 0 means 무약정 (no
-contract) and, when skip_zero_term is set, the row is never alerted on.
+Expiry = opendate + term_months. term_months comes from 개통유형: 기변/신규 use
+default_term_months (24); every other type uses the row's 거래처 term from
+agency_term_months, or nonstandard_term_months (6) if that 거래처 has no override.
 
 The public entry point is `due_milestones(row, config, today)` which returns the
 list of (offset_days, expiry_date) milestones that fall on `today`. Everything is
@@ -17,9 +17,13 @@ computed client-side so correctness never depends on the server date filter.
 from __future__ import annotations
 
 import datetime as _dt
+import html as _html
+import re as _re
 from typing import Any, Iterable
 
-_OPENDATE_RE = None  # (kept for clarity; parsing is done explicitly below)
+# 개통유형(openhowx)이 정확히 이 값이면 표준 약정(기변/신규). "유심신규"는 "신규"를
+# 포함하지만 정확 매칭이라 여기 안 걸리고 비표준(거래처 기준)으로 처리된다.
+STANDARD_OPEN_TYPES = frozenset({"기변", "신규"})
 
 
 def parse_opendate(value: str) -> _dt.date | None:
@@ -63,21 +67,30 @@ def _field(row: dict[str, Any], name: str) -> str:
     return str(row.get(name, "") or "")
 
 
+def normalize_agency(name: str) -> str:
+    """Normalize a 거래처 name for matching: unescape HTML entities (PS&amp;M ->
+    PS&M), collapse whitespace, casefold. Applied to both the config key and the
+    scanned row so minor spacing/case/encoding differences still match."""
+    s = _html.unescape(str(name or ""))
+    s = _re.sub(r"\s+", " ", s).strip().lower()
+    return s
+
+
 def resolve_term_months(row: dict[str, Any], config: dict[str, Any]) -> int:
-    """First matching override wins; otherwise the default term."""
-    default = int(config.get("default_term_months", 24))
-    for rule in config.get("term_overrides", []) or []:
-        try:
-            field = str(rule.get("field", ""))
-            match = str(rule.get("match", ""))
-            term = int(rule.get("term_months"))
-        except (TypeError, ValueError):
-            continue
-        if not field or not match:
-            continue
-        if match.lower() in _field(row, field).lower():
-            return term
-    return default
+    """개통유형 기변/신규 -> 표준 약정. 그 외 -> 거래처별 값(없으면 비표준 기본)."""
+    openhow = _field(row, "openhowx").strip()
+    if openhow in STANDARD_OPEN_TYPES:
+        return int(config.get("default_term_months", 24))
+
+    agency = normalize_agency(_field(row, "agencytitle"))
+    overrides = config.get("agency_term_months", {}) or {}
+    for name, months in overrides.items():
+        if normalize_agency(name) == agency:
+            try:
+                return int(months)
+            except (TypeError, ValueError):
+                break
+    return int(config.get("nonstandard_term_months", 6))
 
 
 def compute_expiry(row: dict[str, Any], config: dict[str, Any]) -> _dt.date | None:
@@ -87,7 +100,7 @@ def compute_expiry(row: dict[str, Any], config: dict[str, Any]) -> _dt.date | No
         return None
     term = resolve_term_months(row, config)
     if term <= 0:
-        return None if config.get("skip_zero_term", True) else open_d
+        return None
     return add_months(open_d, term)
 
 
@@ -130,10 +143,13 @@ def candidate_open_dates(
         expiry = today + offset  and  opendate = expiry - term.
     Includes the default term and every override term.
     """
-    terms: set[int] = {int(config.get("default_term_months", 24))}
-    for rule in config.get("term_overrides", []) or []:
+    terms: set[int] = {
+        int(config.get("default_term_months", 24)),
+        int(config.get("nonstandard_term_months", 6)),
+    }
+    for months in (config.get("agency_term_months", {}) or {}).values():
         try:
-            terms.add(int(rule.get("term_months")))
+            terms.add(int(months))
         except (TypeError, ValueError):
             continue
     dates: set[_dt.date] = set()

@@ -20,19 +20,16 @@ _LOCK = threading.RLock()
 DEFAULTS: dict[str, Any] = {
     "poncle_base_url": "https://m.poncle.co.kr",
 
-    # Contract term. Most Korean handset contracts are 24 months.
-    "default_term_months": 24,
-
-    # Per-product term overrides. Each rule matches a field of the raw Poncle
-    # row and sets a different term. term_months == 0 means "무약정" (no contract)
-    # and, when skip_zero_term is true, those rows are never alerted on.
-    # field is one of the raw JSON keys: "openhowx" (개통유형), "telecomx" (통신사),
-    # "agencytitle" (거래처), "plan" (요금제).  match is a case-insensitive substring.
-    "term_overrides": [
-        # Example (disabled by default — uncomment / edit in Settings):
-        # {"field": "openhowx", "match": "유심", "term_months": 0},
-    ],
-    "skip_zero_term": True,
+    # Contract term is decided by 개통유형 (openhowx):
+    #   기변 / 신규            -> default_term_months (standard, usually 24)
+    #   그 외 (번호이동 / 유심신규 / 유심MNP ...) -> 거래처(agencytitle)마다 다름:
+    #       agency_term_months[<거래처명>] if set, else nonstandard_term_months.
+    # NOTE: 개통유형은 정확히 "기변"/"신규"일 때만 표준. "유심신규"는 "신규"를
+    # 포함하지만 정확 매칭이라 비표준(6개월)으로 처리된다.
+    "default_term_months": 24,       # 기변 / 신규
+    "nonstandard_term_months": 6,    # 그 외 유형의 기본값
+    # 거래처명 -> 개월수. 사용자가 설정에서 조정한 거래처만 담긴다(그 외는 위 기본값).
+    "agency_term_months": {},
 
     # Which milestones to alert on, in days BEFORE expiry. 0 == on the expiry
     # day itself. e.g. [30, 7, 0] fires three separate alerts per customer.
@@ -100,6 +97,10 @@ def _migrate(cfg: dict[str, Any]) -> dict[str, Any]:
     # 'channels' (desktop toast / webhook) was removed with the internal-alert
     # model; a merged file may still carry it. It is never read, so prune it.
     cfg.pop("channels", None)
+    # 'term_overrides' / 'skip_zero_term' were replaced by the 개통유형 + 거래처
+    # term model (default_term_months / nonstandard_term_months / agency_term_months).
+    cfg.pop("term_overrides", None)
+    cfg.pop("skip_zero_term", None)
     # If the user never edited the old internal template, move them to the new
     # customer-facing default. A customized template is left untouched.
     if cfg.get("message_template") == _OLD_DEFAULT_TEMPLATE:

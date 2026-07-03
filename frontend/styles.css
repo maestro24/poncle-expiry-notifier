@@ -147,6 +147,16 @@ textarea{resize:vertical;line-height:1.5}
 textarea.mono{font-family:ui-monospace,'Cascadia Code',Consolas,monospace;font-size:12.5px}
 .save-msg{color:var(--ok);font-size:13px;font-weight:600}
 
+/* term / per-agency settings */
+.term-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:3px 0}
+.term-label{font-weight:500;font-size:13.5px}
+.term-row input[type=number]{width:92px;flex:0 0 92px}
+.agency-terms{margin-top:8px;border:1px solid var(--border);border-radius:10px;background:#FAFAFA;max-height:260px;overflow-y:auto;padding:6px}
+.agency-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 8px;border-bottom:1px solid #F0F0F1}
+.agency-row:last-child{border-bottom:none}
+.agency-name{font-size:13px;color:var(--ink)}
+.agency-term{width:72px;flex:0 0 72px;text-align:right}
+
 /* ---------- results panel (main scan list) ---------- */
 .results-panel{flex:1;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);display:flex;flex-direction:column;overflow:hidden;min-height:0}
 .results-head{padding:12px 18px;border-bottom:1px solid var(--border);font-weight:600;font-size:13px;color:var(--ink);background:#FAFAFA;display:flex;align-items:center;justify-content:space-between}

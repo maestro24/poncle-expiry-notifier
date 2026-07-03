@@ -1,9 +1,17 @@
 """Unit tests for settings migration (channels removal + template upgrade)."""
 import os
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# tests/__init__.py redirects app data to a temp dir, but `unittest discover -s
+# tests` (without -t) imports modules top-level and skips the package __init__.
+# This module is imported first (alphabetically), so redirect here too — before
+# importing backend — if it hasn't happened yet. Idempotent via the prefix check.
+if "poncle_test_" not in (os.environ.get("LOCALAPPDATA") or ""):
+    os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="poncle_test_")
 
 from backend.config import DEFAULTS, _OLD_DEFAULT_TEMPLATE, _migrate
 

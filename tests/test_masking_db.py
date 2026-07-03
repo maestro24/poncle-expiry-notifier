@@ -1,15 +1,12 @@
 """Tests for PII masking and the SQLite dedup/store."""
 import os
 import sys
-import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Redirect all app data to a temp dir BEFORE importing db.
-_TMP = tempfile.mkdtemp(prefix="poncle_test_")
-os.environ["LOCALAPPDATA"] = _TMP
-
+# App data is redirected to a temp dir in tests/__init__.py (before any backend
+# import), so db/config tests never touch the user's real data.
 from backend.masking import mask_name, mask_phone  # noqa: E402
 
 

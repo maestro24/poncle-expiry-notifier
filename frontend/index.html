@@ -121,9 +121,17 @@
       </div>
 
       <div class="field">
-        <label>기본 약정 기간 (개월)</label>
-        <input type="number" id="s-term" min="0" max="60" />
-        <p class="hint">대부분의 휴대폰 약정은 24개월입니다.</p>
+        <label>약정 기간 (개월)</label>
+        <div class="term-row">
+          <span class="term-label">기변 · 신규 <span class="muted">(표준)</span></span>
+          <input type="number" id="s-standard-term" min="1" max="60" />
+        </div>
+        <div class="term-row">
+          <span class="term-label">그 외 유형 기본 <span class="muted">(번호이동/유심 등)</span></span>
+          <input type="number" id="s-nonstandard-term" min="0" max="60" />
+        </div>
+        <p class="hint">기변·신규는 표준 약정(보통 24개월). 나머지 유형은 거래처마다 달라서 아래에서 거래처별로 조정합니다. 개월수를 0으로 두면 그 거래처는 알림에서 제외됩니다.</p>
+        <div class="agency-terms" id="agency-terms"></div>
       </div>
 
       <div class="field">
@@ -157,12 +165,6 @@
         </div>
       </div>
 
-      <div class="field">
-        <label>약정 예외 규칙 (고급)</label>
-        <p class="hint">특정 상품의 약정을 다르게 처리합니다. 예: 유심MNP는 무약정(0개월)으로 제외. JSON 배열 형식.</p>
-        <textarea id="s-overrides" rows="4" class="mono" placeholder='[{"field":"openhowx","match":"유심","term_months":0}]'></textarea>
-        <p class="hint">field: openhowx(개통유형) · telecomx(통신사) · agencytitle(거래처) · plan(요금제) / match: 포함 문자열 / term_months: 0이면 제외</p>
-      </div>
     </div>
 
     <div class="actions actions-settings">
