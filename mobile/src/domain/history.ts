@@ -8,6 +8,7 @@
  * adequate; if it ever outgrows that, swap the backend for capacitor-sqlite
  * without touching callers.
  */
+import { Preferences } from "@capacitor/preferences";
 
 export interface SentRecord {
   phone: string;
@@ -94,12 +95,10 @@ export class History {
 export function preferencesKV(): KV {
   return {
     async get(key: string): Promise<string | null> {
-      const { Preferences } = await import("@capacitor/preferences");
       const { value } = await Preferences.get({ key });
       return value ?? null;
     },
     async set(key: string, value: string): Promise<void> {
-      const { Preferences } = await import("@capacitor/preferences");
       await Preferences.set({ key, value });
     },
   };

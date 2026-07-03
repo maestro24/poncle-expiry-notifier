@@ -4,9 +4,122 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>약정만료 알리미</title>
+  <link rel="stylesheet" href="/src/styles.css" />
 </head>
 <body>
-  <div id="app">약정만료 알리미 - 부팅 중…</div>
-  <script type="module" src="/src/main.ts"></script>
+<div id="app">
+
+  <!-- ===== MAIN ===== -->
+  <section id="view-main" class="view">
+    <header class="topbar">
+      <span class="brand">약정만료 알리미</span>
+      <span class="state-pill" id="state-pill"><span class="dot"></span><span id="state-text">대기중</span></span>
+    </header>
+
+    <div id="login-banner" class="banner hidden">
+      <div>
+        <b>폰클 로그인이 필요합니다.</b>
+        <span>고객 목록을 읽으려면 폰클에 로그인하세요.</span>
+      </div>
+      <button class="btn btn-warn" id="btn-login">폰클 로그인</button>
+    </div>
+
+    <div class="cards">
+      <div class="card"><div class="card-label">대상자</div><div class="card-num" id="c-targets">0</div></div>
+      <div class="card card-warn"><div class="card-label">미발송</div><div class="card-num" id="c-pending">0</div></div>
+      <div class="card card-ok"><div class="card-label">발송함</div><div class="card-num" id="c-sent">0</div></div>
+    </div>
+
+    <div class="results">
+      <div class="results-head">
+        <span>약정 만료 대상</span>
+        <span class="results-note" id="results-note"></span>
+      </div>
+      <div id="r-list"></div>
+      <div class="empty" id="r-empty">스캔 결과가 없습니다. “지금 스캔”을 눌러 주세요.</div>
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-primary" id="btn-scan">지금 스캔</button>
+      <button class="btn" id="btn-history">발송 이력</button>
+      <button class="btn" id="btn-settings">설정</button>
+      <button class="btn btn-ghost" id="btn-test-target">＋테스트</button>
+      <span class="deliver-hint" id="deliver-hint"></span>
+    </div>
+  </section>
+
+  <!-- ===== HISTORY ===== -->
+  <section id="view-history" class="view hidden">
+    <header class="topbar">
+      <button class="btn btn-ghost" data-back>← 뒤로</button>
+      <span class="brand">발송 이력</span>
+    </header>
+    <div class="filters">
+      <input type="search" id="h-query" placeholder="고객명 또는 번호" />
+      <input type="date" id="h-start" />
+      <span class="tilde">~</span>
+      <input type="date" id="h-end" />
+      <button class="btn btn-primary" id="btn-h-search">검색</button>
+    </div>
+    <div id="h-list"></div>
+    <div class="empty" id="h-empty">이력이 없습니다.</div>
+  </section>
+
+  <!-- ===== SETTINGS ===== -->
+  <section id="view-settings" class="view hidden">
+    <header class="topbar">
+      <button class="btn btn-ghost" data-back>← 뒤로</button>
+      <span class="brand">설정</span>
+    </header>
+
+    <div class="settings">
+      <div class="field">
+        <label class="inline"><input type="checkbox" id="s-deliver" /> 고객에게 실제로 문자를 전송</label>
+        <p class="hint">꺼두면 “알림 보내기”가 발송 이력에만 기록되고 실제 문자는 나가지 않습니다.</p>
+      </div>
+
+      <div class="field">
+        <label>문자 내용 · 기변/신규</label>
+        <textarea id="s-template" rows="4"></textarea>
+      </div>
+      <div class="field">
+        <label>문자 내용 · 번호이동/유심 <span class="muted">(그 외 유형)</span></label>
+        <textarea id="s-template-nonstandard" rows="4"></textarea>
+        <p class="hint">변수: {customer} {telecom} {model} {expiry} {opendate} {when}</p>
+      </div>
+
+      <div class="field">
+        <label>약정 기간 (개월)</label>
+        <div class="term-row"><span>기변 · 신규 <span class="muted">(표준)</span></span><input type="number" id="s-standard-term" min="1" max="60" /></div>
+        <div class="term-row"><span>그 외 기본 <span class="muted">(번호이동/유심)</span></span><input type="number" id="s-nonstandard-term" min="0" max="60" /></div>
+        <p class="hint">기변·신규는 표준 약정(보통 24). 나머지는 거래처마다 달라 아래에서 조정합니다. 0으로 두면 그 거래처는 제외됩니다.</p>
+        <div id="agency-terms"></div>
+      </div>
+
+      <div class="field">
+        <label>안내 시점</label>
+        <div class="checks">
+          <label><input type="checkbox" class="s-offset" value="0" /> 만료 당일 (D-day)</label>
+          <label><input type="checkbox" class="s-offset" value="7" /> 7일 전 (D-7)</label>
+          <label><input type="checkbox" class="s-offset" value="30" /> 30일 전 (D-30)</label>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>폰클 세션</label>
+        <button class="btn" id="btn-relogin">폰클 다시 로그인</button>
+        <button class="btn btn-ghost" id="btn-logout">로그아웃</button>
+        <span class="save-msg" id="session-msg"></span>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-primary" id="btn-save">저장</button>
+      <span class="save-msg" id="save-msg"></span>
+    </div>
+  </section>
+
+</div>
+<script type="module" src="/src/main.ts"></script>
 </body>
 </html>
