@@ -19,6 +19,7 @@ from backend import config as config_mod
 from backend import autostart, db, updater
 from backend.api import Api
 from backend.paths import assets_dir, frontend_dir
+from backend.phone_link import PhoneLink
 from backend.scan import STATE_IDLE, STATE_SESSION_EXPIRED, Scanner
 from backend.scheduler import Scheduler
 from backend.session import SessionManager
@@ -42,6 +43,7 @@ class App:
         self.scheduler = Scheduler(self.scanner)
 
         self.api = Api(self)
+        self.phone_link = PhoneLink()
         self.window: Any = None
         self.login_window: Any = None
         self._login_polling = False
@@ -102,6 +104,10 @@ class App:
             "has_session": self.session_mgr.has_cookies(),
             "session_saved_at": self.session_mgr.saved_at,
             "counts": counts,
+            "phone": {
+                "available": self.phone_link.connect_url() is not None,
+                "connected": self.phone_link.is_connected(),
+            },
             "version": _version(),
         }
 
@@ -229,6 +235,10 @@ class App:
         except Exception:
             pass
         try:
+            self.phone_link.stop()
+        except Exception:
+            pass
+        try:
             for w in list(webview.windows):
                 w.destroy()
         except Exception:
@@ -243,6 +253,10 @@ class App:
             pass
         try:
             self._start_tray()
+        except Exception:
+            pass
+        try:
+            self.phone_link.start()
         except Exception:
             pass
         threading.Thread(target=self._initial_probe, daemon=True).start()

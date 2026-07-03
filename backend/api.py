@@ -45,7 +45,7 @@ class Api:
     def send_alert(self, item: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(item, dict):
             return {"status": "error", "error": "invalid item"}
-        res = sender.send_alert(item, config_mod.load())
+        res = sender.send_alert(item, config_mod.load(), self._app.phone_link)
         # Reflect the new sent state back into the in-memory scan results.
         if res.get("status") in ("sent", "already"):
             self._app.mark_result_sent(item.get("id"))
@@ -76,6 +76,15 @@ class Api:
     def apply_update(self) -> dict[str, Any]:
         self._app.apply_update()
         return {"status": "downloading"}
+
+    # -- phone link -----------------------------------------------------------
+    def get_phone_status(self) -> dict[str, Any]:
+        pl = self._app.phone_link
+        return {
+            "available": pl.connect_url() is not None,
+            "connected": pl.is_connected(),
+            "qr": pl.qr_data_url(),
+        }
 
     # -- history ------------------------------------------------------------
     def get_history(self, query: str = "", start: str = "", end: str = "") -> list[dict[str, Any]]:
