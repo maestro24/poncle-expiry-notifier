@@ -24,26 +24,12 @@ def main() -> int:
 
     import PyInstaller.__main__
 
-    sep = ";" if os.name == "nt" else ":"
-    args = [
-        "--noconfirm", "--clean",
-        "--onefile",           # one distributable .exe
-        "--windowed",          # no console window (GUI app)
-        f"--name={APP_NAME}",
-        f"--icon=assets/icon.ico",
-        f"--add-data=frontend{sep}frontend",
-        f"--add-data=assets{sep}assets",
-        # pywebview (+ its Edge WebView2 backend), tray, toasts: pull everything.
-        "--collect-all=webview",
-        "--collect-all=pystray",
-        "--collect-all=windows_toasts",
-        "--collect-all=winsdk",
-        "--collect-submodules=apscheduler",
-        "--hidden-import=clr_loader",
-        "app.py",
-    ]
-    print("PyInstaller args:", " ".join(args))
-    PyInstaller.__main__.run(args)
+    # Build from the committed .spec (NOT raw CLI flags): the spec filters out the
+    # api-ms-win-core-* OS API-set stubs that a Windows Server build host bundles
+    # and that break python312.dll loading on client Windows. See the spec header.
+    spec = f"{APP_NAME}.spec"
+    print("Building from spec:", spec)
+    PyInstaller.__main__.run(["--noconfirm", "--clean", spec])
     print(f"\nBuilt: dist/{APP_NAME}.exe")
     return 0
 

@@ -11,7 +11,7 @@ venv/
 # PyInstaller build artifacts
 build/
 dist/
-*.spec
+# NOTE: 약정만료 알리미.spec IS committed (it filters api-ms-win-core stubs); do not ignore it.
 
 # Local user data / logs (never in repo)
 *.log
