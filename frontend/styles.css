@@ -145,10 +145,6 @@ label.inline input{width:16px;height:16px}
 .checks label{display:flex;align-items:center;gap:8px;font-weight:500;cursor:pointer}
 textarea{resize:vertical;line-height:1.5}
 textarea.mono{font-family:ui-monospace,'Cascadia Code',Consolas,monospace;font-size:12.5px}
-.webhook-box{border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:10px;background:#FAFAFA}
-.webhook-fields{display:flex;gap:8px}
-.webhook-fields select{flex:0 0 130px}
-.webhook-fields input{flex:1}
 .save-msg{color:var(--ok);font-size:13px;font-weight:600}
 
 /* ---------- results panel (main scan list) ---------- */

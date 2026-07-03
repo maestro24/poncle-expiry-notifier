@@ -1,19 +1,18 @@
-"""Send (record) an alert for one due customer, triggered by "알림 보내기".
+"""Send (record) an outbound customer message for one due row, from "알림 보내기".
 
 Behaviour is intentionally split:
   - ALWAYS record the send into sent_log (dedup + 발송 이력), so staff can track
-    who has been handled.
-  - ONLY dispatch to real channels (toast / webhook) when config.deliver_alerts
-    is True. It defaults to False, so right now pressing the button records the
-    send without actually notifying anywhere.
+    which customers have been handled.
+  - When config.deliver_alerts is True, this is ALSO where the real customer
+    message would be dispatched. The delivery transport (KDE Connect / QR / SMS)
+    is not wired yet, so for now it still only records (marked "pending"). It
+    defaults to False, so pressing the button just records the send.
 """
 from __future__ import annotations
 
 from typing import Any
 
 from . import db
-from .notifier import Notifier, render_message
-from .expiry import format_when
 
 
 def send_alert(item: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
@@ -43,22 +42,12 @@ def send_alert(item: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     channel = "record-only"
     detail = "기록만 (실제 발송 비활성화)"
     if config.get("deliver_alerts", False):
-        notifier = Notifier(config)
-        when = format_when(offset, _safe_date(expiry))
-        message = render_message(config.get("message_template", ""), entry, when)
-        res = notifier.notify(message, entry)
-        channel = ",".join(res.get("channels", [])) or "none"
-        detail = res.get("detail", "")
+        # 실제 고객 문자 발송(KDE Connect / QR / SMS) 연동 예정 위치.
+        # 방식이 아직 연결되지 않아 지금은 기록만 하고 pending으로 표시한다.
+        channel = "pending"
+        detail = "문자 전송 방식 미연결 (기록만)"
 
     newly = db.record_sent(entry, channel)
     if not newly:
         return {"status": "already"}
     return {"status": "sent", "channel": channel, "detail": detail}
-
-
-def _safe_date(iso: str):
-    import datetime as _dt
-    try:
-        return _dt.date.fromisoformat(iso)
-    except ValueError:
-        return _dt.date.today()

@@ -109,9 +109,15 @@
 
     <div class="settings-scroll">
       <div class="field">
-        <label>실제 알림 발송</label>
-        <label class="inline"><input type="checkbox" id="s-deliver" /> 실제로 알림을 발송(데스크톱/웹훅)합니다</label>
-        <p class="hint">꺼두면 “알림 보내기”가 <b>발송 이력에만 기록</b>되고 실제로는 아무 데도 보내지 않습니다. (현재 기본: 꺼짐)</p>
+        <label>문자 발송</label>
+        <label class="inline"><input type="checkbox" id="s-deliver" /> 고객에게 실제로 문자를 전송합니다</label>
+        <p class="hint">꺼두면 “알림 보내기”가 <b>발송 이력에만 기록</b>되고 실제로는 전송되지 않습니다. (현재 기본: 꺼짐 · 문자 전송 방식은 추후 연결)</p>
+      </div>
+
+      <div class="field">
+        <label>문자 내용 <span class="muted">(고객에게 보낼 메시지)</span></label>
+        <textarea id="s-template" rows="3"></textarea>
+        <p class="hint">사용 가능 변수: {customer} {telecom} {model} {expiry} {opendate} {when}</p>
       </div>
 
       <div class="field">
@@ -121,7 +127,7 @@
       </div>
 
       <div class="field">
-        <label>알림 시점</label>
+        <label>안내 시점</label>
         <div class="checks">
           <label><input type="checkbox" class="s-offset" value="0" /> 만료 당일 (D-day)</label>
           <label><input type="checkbox" class="s-offset" value="7" /> 7일 전 (D-7)</label>
@@ -148,29 +154,6 @@
           <span class="muted">현재 버전 <b id="s-current-ver">-</b></span>
           <button class="btn btn-ghost" id="btn-check-update">업데이트 확인</button>
           <span class="save-msg" id="update-msg"></span>
-        </div>
-      </div>
-
-      <div class="field">
-        <label>알림 문구 템플릿 <span class="muted">(실제 발송 켰을 때 사용)</span></label>
-        <textarea id="s-template" rows="3"></textarea>
-        <p class="hint">사용 가능 변수: {customer} {phone} {expiry} {opendate} {telecom} {agency} {plan} {model} {staff} {when}</p>
-      </div>
-
-      <div class="field">
-        <label>알림 채널 <span class="muted">(실제 발송 켰을 때만 동작)</span></label>
-        <label class="inline"><input type="checkbox" id="s-toast" /> Windows 데스크톱 알림(토스트)</label>
-        <div class="webhook-box">
-          <label class="inline"><input type="checkbox" id="s-webhook-enabled" /> 웹훅으로도 보내기</label>
-          <div class="webhook-fields">
-            <select id="s-webhook-type">
-              <option value="slack">Slack</option>
-              <option value="discord">Discord</option>
-              <option value="kakaowork">KakaoWork</option>
-              <option value="generic">일반(JSON)</option>
-            </select>
-            <input type="url" id="s-webhook-url" placeholder="https://hooks.slack.com/services/..." />
-          </div>
         </div>
       </div>
 

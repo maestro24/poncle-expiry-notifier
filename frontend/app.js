@@ -185,12 +185,6 @@ function populateSettings(s) {
   $("#s-autoupdate").checked = s.auto_check_updates !== false;
   $("#s-current-ver").textContent = $("#app-version").textContent || "-";
   $("#s-template").value = s.message_template || "";
-  const ch = s.channels || {};
-  $("#s-toast").checked = !!ch.desktop_toast;
-  const wh = ch.webhook || {};
-  $("#s-webhook-enabled").checked = !!wh.enabled;
-  $("#s-webhook-type").value = wh.type || "slack";
-  $("#s-webhook-url").value = wh.url || "";
   $("#s-overrides").value = JSON.stringify(s.term_overrides || [], null, 0);
   renderDeliverHint();
 }
@@ -214,15 +208,6 @@ function gatherSettings() {
     auto_check_updates: $("#s-autoupdate").checked,
     message_template: $("#s-template").value,
     term_overrides: overrides,
-    channels: {
-      desktop_toast: $("#s-toast").checked,
-      in_app: true,
-      webhook: {
-        enabled: $("#s-webhook-enabled").checked,
-        type: $("#s-webhook-type").value,
-        url: $("#s-webhook-url").value.trim(),
-      },
-    },
   };
 }
 
@@ -404,9 +389,8 @@ function mockSettings() {
   return {
     deliver_alerts: false, default_term_months: 24, notify_offsets_days: [0], run_time: "09:00",
     run_on_startup: true, autostart_enabled: false, auto_check_updates: true,
-    message_template: "[약정만료] {customer}님 ({phone}) 2년 약정 만료 {when}.",
+    message_template: "안녕하세요 {customer}님. {telecom} 휴대폰({model}) 2년 약정이 {expiry}에 만료됩니다.",
     term_overrides: [],
-    channels: { desktop_toast: true, in_app: true, webhook: { enabled: false, type: "slack", url: "" } },
   };
 }
 function mockResults() {

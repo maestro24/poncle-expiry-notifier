@@ -49,29 +49,19 @@ DEFAULTS: dict[str, Any] = {
     # Check GitHub Releases for a newer build on startup and prompt to install.
     "auto_check_updates": True,
 
-    # Internal alert text. Placeholders: {customer} {phone} {expiry} {opendate}
-    # {telecom} {agency} {plan} {model} {offset} {staff}
+    # Outbound message sent TO the customer. Placeholders: {customer} {telecom}
+    # {model} {expiry} {opendate} {when} (also available: {phone} {agency} {plan}).
     "message_template": (
-        "[약정만료] {customer}님 ({phone}) 2년 약정 만료 {when}. "
-        "개통 {opendate} · {telecom} · {agency}"
+        "안녕하세요 {customer}님. 사용 중이신 {telecom} 휴대폰({model})의 "
+        "2년 약정이 {expiry}에 만료됩니다. 기기변경/요금제 상담 원하시면 "
+        "편하게 연락 주세요."
     ),
 
-    # Master switch for ACTUALLY delivering alerts (toast / webhook). When False,
+    # Master switch for ACTUALLY sending the message to customers. When False,
     # pressing "알림 보내기" still records the send into 발송 이력 (so staff can track
-    # who has been handled) but NOTHING is dispatched anywhere. Default off per the
-    # current requirement: build the list, track sends, but send nothing yet.
+    # which customers have been handled) but nothing is sent. The delivery
+    # transport (KDE Connect / QR / SMS) is not wired yet, so this stays off.
     "deliver_alerts": False,
-
-    # Notification channels (used only when deliver_alerts is True).
-    "channels": {
-        "desktop_toast": True,   # native Windows toast
-        "in_app": True,          # live log + history inside the app
-        "webhook": {             # optional Slack / Discord / KakaoWork incoming webhook
-            "enabled": False,
-            "type": "slack",     # slack | discord | kakaowork | generic
-            "url": "",
-        },
-    },
 
     # Efficiency / safety knobs for scraping.
     "use_server_date_filter": True,   # ask Poncle to pre-filter by open date
@@ -97,6 +87,26 @@ def _deep_merge(base: dict, over: dict) -> dict:
     return out
 
 
+# The old internal-alert default template, kept only to detect an un-customized
+# older settings.json so we can upgrade it to the new customer-facing default.
+_OLD_DEFAULT_TEMPLATE = (
+    "[약정만료] {customer}님 ({phone}) 2년 약정 만료 {when}. "
+    "개통 {opendate} · {telecom} · {agency}"
+)
+
+
+def _migrate(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Drop removed keys and upgrade un-customized old defaults in place."""
+    # 'channels' (desktop toast / webhook) was removed with the internal-alert
+    # model; a merged file may still carry it. It is never read, so prune it.
+    cfg.pop("channels", None)
+    # If the user never edited the old internal template, move them to the new
+    # customer-facing default. A customized template is left untouched.
+    if cfg.get("message_template") == _OLD_DEFAULT_TEMPLATE:
+        cfg["message_template"] = DEFAULTS["message_template"]
+    return cfg
+
+
 def load() -> dict[str, Any]:
     """Return current settings (defaults merged with the on-disk file)."""
     with _LOCK:
@@ -107,7 +117,7 @@ def load() -> dict[str, Any]:
             raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
             if not isinstance(raw, dict):
                 raise ValueError("settings.json is not an object")
-            return _deep_merge(DEFAULTS, raw)
+            return _migrate(_deep_merge(DEFAULTS, raw))
         except (json.JSONDecodeError, ValueError, OSError):
             # Corrupt file: back it up and fall back to defaults rather than crash.
             try:
@@ -121,7 +131,7 @@ def load() -> dict[str, Any]:
 def save(settings: dict[str, Any]) -> None:
     """Persist settings atomically."""
     with _LOCK:
-        merged = _deep_merge(DEFAULTS, settings)
+        merged = _migrate(_deep_merge(DEFAULTS, settings))
         tmp = CONFIG_PATH.with_suffix(".tmp")
         tmp.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(CONFIG_PATH)
