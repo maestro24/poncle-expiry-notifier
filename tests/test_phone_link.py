@@ -3,6 +3,47 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend import phone_link as pl
 
 
+class _FakeTunnel:
+    def __init__(self, url):
+        self._url = url
+        self.error = None
+    def public_url(self):
+        return self._url
+    def is_ready(self):
+        return self._url is not None
+    def stop(self):
+        pass
+
+
+class TestRemote(unittest.TestCase):
+    def setUp(self):
+        self.link = pl.PhoneLink()
+        self.assertTrue(self.link.start())
+
+    def tearDown(self):
+        self.link.stop()
+
+    def test_connect_url_lan_when_no_tunnel(self):
+        url = self.link.connect_url()
+        self.assertTrue(url.startswith("http://"))
+        self.assertIn(f"/p/{self.link.token}", url)
+
+    def test_connect_url_uses_tunnel_when_ready(self):
+        self.link._tunnel = _FakeTunnel("https://foo-bar.trycloudflare.com")
+        self.assertEqual(
+            self.link.connect_url(),
+            f"https://foo-bar.trycloudflare.com/p/{self.link.token}",
+        )
+        st = self.link.remote_status()
+        self.assertTrue(st["enabled"])
+        self.assertTrue(st["ready"])
+
+    def test_connect_url_none_when_tunnel_not_ready(self):
+        self.link._tunnel = _FakeTunnel(None)  # enabled, not ready
+        self.assertIsNone(self.link.connect_url())
+        self.assertFalse(self.link.remote_status()["ready"])
+
+
 class TestHelpers(unittest.TestCase):
     def test_token_is_32_hex(self):
         t = pl.new_token()

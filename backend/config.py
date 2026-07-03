@@ -46,6 +46,10 @@ DEFAULTS: dict[str, Any] = {
     # Check GitHub Releases for a newer build on startup and prompt to install.
     "auto_check_updates": True,
 
+    # Phone link remote mode: when True, bring up a Cloudflare quick tunnel so the
+    # phone can connect from any network (not just the same LAN). Off = local only.
+    "phone_remote_enabled": False,
+
     # Outbound message sent TO the customer. Two templates, chosen by 개통유형 the
     # same way the term is: 기변/신규 use message_template, everything else
     # (번호이동/유심신규/유심MNP) uses message_template_nonstandard.

@@ -12,7 +12,7 @@ import time
 import urllib.parse
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Optional
+from typing import Any, Optional
 
 
 def new_token() -> str:
@@ -97,6 +97,7 @@ class PhoneLink:
         self._server: Optional[ThreadingHTTPServer] = None
         self._last_poll = 0.0
         self._lock = threading.Lock()
+        self._tunnel: Any = None  # backend.tunnel.Tunnel when remote is enabled
 
     # -- lifecycle ----------------------------------------------------------
     def start(self) -> bool:
@@ -120,6 +121,7 @@ class PhoneLink:
         return True
 
     def stop(self) -> None:
+        self.disable_remote()
         if self._server is not None:
             try:
                 self._server.shutdown()
@@ -139,7 +141,46 @@ class PhoneLink:
     def connect_url(self) -> Optional[str]:
         if self._server is None:
             return None
+        if self._tunnel is not None:
+            pub = self._tunnel.public_url()
+            if not pub:
+                return None  # remote enabled but the tunnel isn't ready yet
+            return f"{pub}/p/{self.token}"
         return f"http://{self._ip}:{self.port}/p/{self.token}"
+
+    # -- remote (Cloudflare tunnel) -----------------------------------------
+    def enable_remote(self) -> None:
+        """Turn on remote access: bring up a Cloudflare quick tunnel so the phone
+        can connect from any network. The binary download + tunnel spin-up run on
+        a background thread; poll remote_status() for readiness."""
+        if self._tunnel is not None:
+            return
+        from .tunnel import Tunnel
+        t = Tunnel()
+        self._tunnel = t
+        port = self.port
+
+        def _bg() -> None:
+            try:
+                t.start(port)
+            except Exception as e:  # download / spawn failure
+                t.error = str(e)
+
+        threading.Thread(target=_bg, daemon=True).start()
+
+    def disable_remote(self) -> None:
+        t = self._tunnel
+        self._tunnel = None
+        if t is not None:
+            t.stop()
+
+    def remote_status(self) -> dict:
+        t = self._tunnel
+        return {
+            "enabled": t is not None,
+            "ready": bool(t is not None and t.is_ready()),
+            "error": (t.error if t is not None else None),
+        }
 
     def qr_data_url(self) -> Optional[str]:
         url = self.connect_url()

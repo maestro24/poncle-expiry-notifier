@@ -257,6 +257,8 @@ class App:
             pass
         try:
             self.phone_link.start()
+            if config_mod.load().get("phone_remote_enabled", False):
+                self.phone_link.enable_remote()
         except Exception:
             pass
         threading.Thread(target=self._initial_probe, daemon=True).start()

@@ -84,7 +84,17 @@ class Api:
             "available": pl.connect_url() is not None,
             "connected": pl.is_connected(),
             "qr": pl.qr_data_url(),
+            "remote": pl.remote_status(),
         }
+
+    def set_phone_remote(self, enabled: bool) -> dict[str, Any]:
+        pl = self._app.phone_link
+        if enabled:
+            pl.enable_remote()
+        else:
+            pl.disable_remote()
+        config_mod.update({"phone_remote_enabled": bool(enabled)})
+        return {"status": "ok", "remote": pl.remote_status()}
 
     # -- history ------------------------------------------------------------
     def get_history(self, query: str = "", start: str = "", end: str = "") -> list[dict[str, Any]]:

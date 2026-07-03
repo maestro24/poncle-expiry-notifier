@@ -141,12 +141,32 @@ let PHONE_TIMER = null;
 async function refreshPhoneStatus() {
   const st = await call("get_phone_status");
   const card = $("#phone-card");
-  if (!st || !st.available) { card.classList.add("hidden"); return; }
+  const remote = (st && st.remote) || {};
+  // Show the card when a QR is available OR remote is enabled (spinning up).
+  if (!st || (!st.available && !remote.enabled)) { card.classList.add("hidden"); return; }
   card.classList.remove("hidden");
-  if (st.qr) $("#phone-qr").src = st.qr;
+  $("#s-phone-remote").checked = !!remote.enabled;
+
+  if (st.available && st.qr) {
+    $("#phone-qr").src = st.qr;
+    $("#phone-qr").classList.remove("hidden");
+  } else {
+    $("#phone-qr").classList.add("hidden");
+  }
   const on = !!st.connected;
   $("#phone-pill").className = "phone-pill " + (on ? "is-on" : "");
   $("#phone-stat").textContent = on ? "연결됨" : "대기중";
+
+  const rmsg = $("#phone-remote-msg");
+  if (remote.enabled && remote.error) {
+    rmsg.textContent = "원격 연결 실패: " + remote.error;
+  } else if (remote.enabled && !st.available) {
+    rmsg.textContent = "원격 연결 준비 중… (터널 생성, 최대 10초)";
+  } else if (remote.enabled && st.available) {
+    rmsg.textContent = "원격 연결됨 · 다른 네트워크에서도 스캔 가능";
+  } else {
+    rmsg.textContent = "";
+  }
 }
 function startPhonePolling() {
   refreshPhoneStatus();
@@ -356,6 +376,14 @@ function bind() {
   $("#btn-h-search").onclick = loadHistory;
   $("#h-query").addEventListener("keydown", (e) => { if (e.key === "Enter") loadHistory(); });
 
+  $("#s-phone-remote").onchange = async (e) => {
+    const on = e.currentTarget.checked;
+    const msg = $("#phone-remote-msg");
+    msg.textContent = on ? "원격 연결 준비 중… (터널 생성, 최대 10초)" : "";
+    await call("set_phone_remote", on);
+    refreshPhoneStatus();
+  };
+
   $("#upd-later").onclick = () => $("#update-modal").classList.add("hidden");
   $("#upd-now").onclick = async (e) => {
     const b = e.currentTarget;
@@ -460,7 +488,8 @@ function mock(method, args) {
     }];
   }
   if (method === "send_alert") return { status: "sent" };
-  if (method === "get_phone_status") return { available: false, connected: false, qr: null };
+  if (method === "get_phone_status") return { available: false, connected: false, qr: null, remote: { enabled: false, ready: false, error: null } };
+  if (method === "set_phone_remote") return { status: "ok", remote: { enabled: !!(args && args[0]), ready: false, error: null } };
   if (method === "save_settings") return { status: "ok", settings: (args && args[0]) || mockSettings() };
   if (method === "check_update") return { status: "ok", available: false, version: "1.2.0", current: "1.2.0", notes: "" };
   if (method === "apply_update") return { status: "downloading" };
