@@ -133,7 +133,10 @@ def _spawn_swap(new_exe: Path, target: Path) -> None:
         f'start "" "{target}"\r\n'
         'del "%~f0"\r\n'
     )
-    bat.write_text(script, encoding="ascii")
+    # cmd.exe reads the .bat using the console's code page (cp949 on Korean
+    # Windows). The installed exe path contains Korean, so ascii would fail; write
+    # with the Windows ANSI/OEM code page ("mbcs") so cmd parses the paths right.
+    bat.write_text(script, encoding="mbcs")
     subprocess.Popen(
         ["cmd", "/c", str(bat)],
         creationflags=_DETACHED_PROCESS | _CREATE_NO_WINDOW,
