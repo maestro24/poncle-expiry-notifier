@@ -5,7 +5,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend.updater import _parse, is_newer
+from backend.updater import _USER_AGENT, _parse, is_newer
 
 
 class TestVersionCompare(unittest.TestCase):
@@ -33,6 +33,12 @@ class TestVersionCompare(unittest.TestCase):
         # (1, 2) < (1, 2, 1)  -> tuple comparison handles missing patch
         self.assertTrue(is_newer("1.2.1", "1.2"))
         self.assertFalse(is_newer("1.2", "1.2.1"))
+
+    def test_user_agent_is_latin1_safe(self):
+        # HTTP header values must encode as latin-1. A Korean User-Agent (the app
+        # name) silently broke every update check via UnicodeEncodeError.
+        _USER_AGENT.encode("latin-1")
+        self.assertTrue(_USER_AGENT.isascii())
 
 
 if __name__ == "__main__":

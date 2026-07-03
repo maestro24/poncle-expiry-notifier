@@ -27,6 +27,8 @@ from .paths import data_dir
 # Public repo that hosts the release assets (version.json is the release itself).
 GITHUB_REPO = "maestro24/poncle-expiry-notifier"
 _API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+# HTTP headers must be latin-1; APP_NAME is Korean, so use an ASCII User-Agent.
+_USER_AGENT = "PoncleExpiryNotifier-Updater"
 _CHECK_TIMEOUT = 15
 _DOWNLOAD_TIMEOUT = 180
 _MIN_EXE_BYTES = 1_000_000  # a real onefile build is ~20MB; guard against a truncated/HTML body
@@ -71,7 +73,7 @@ def check() -> Optional[dict[str, Any]]:
     try:
         req = urllib.request.Request(
             _API_LATEST,
-            headers={"Accept": "application/vnd.github+json", "User-Agent": APP_NAME},
+            headers={"Accept": "application/vnd.github+json", "User-Agent": _USER_AGENT},
         )
         with urllib.request.urlopen(req, timeout=_CHECK_TIMEOUT) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -102,7 +104,7 @@ def _download(url: str) -> Path:
     updir = data_dir() / "update"
     updir.mkdir(parents=True, exist_ok=True)
     dst = updir / f"{APP_NAME}.new.exe"
-    req = urllib.request.Request(url, headers={"User-Agent": APP_NAME})
+    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     with urllib.request.urlopen(req, timeout=_DOWNLOAD_TIMEOUT) as resp, open(dst, "wb") as f:
         while True:
             chunk = resp.read(65536)
