@@ -16,9 +16,11 @@ and the traffic is HTTPS to Cloudflare's edge. See the phone-link design spec.
 """
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import threading
+import time
 import urllib.request
 from pathlib import Path
 from typing import Optional
@@ -49,6 +51,22 @@ def parse_tunnel_url(text: str) -> Optional[str]:
     """Extract the trycloudflare URL from a line of cloudflared output."""
     m = _URL_RE.search(text or "")
     return m.group(0) if m else None
+
+
+def _dns_resolves(host: str) -> bool:
+    """True once `host` resolves. Uses Cloudflare DoH (1.1.1.1) because the local
+    OS resolver lags and negative-caches the just-created hostname; DoH sees the
+    authoritative record first, which is also what the phone's resolver will get."""
+    try:
+        req = urllib.request.Request(
+            f"https://1.1.1.1/dns-query?name={host}&type=A",
+            headers={"accept": "application/dns-json"},
+        )
+        with urllib.request.urlopen(req, timeout=6) as r:
+            data = json.load(r)
+        return any(a.get("type") == 1 for a in data.get("Answer", []))
+    except Exception:
+        return False
 
 
 def _sha256(path: Path) -> str:
@@ -120,15 +138,32 @@ class Tunnel:
         proc = self._proc
         if proc is None or proc.stdout is None:
             return
+        dns_started = False
         for line in proc.stdout:
-            url = parse_tunnel_url(line)
-            if url:
-                with self._lock:
-                    self._url = url
-                # keep draining so the pipe never blocks cloudflared
+            # keep draining the whole time so the pipe never blocks cloudflared
+            if not dns_started:
+                url = parse_tunnel_url(line)
+                if url:
+                    dns_started = True
+                    # cloudflared prints the URL ~15-20s BEFORE its random hostname
+                    # is DNS-resolvable. Publish it (show the QR) only once DNS is
+                    # live, so a phone that scans immediately doesn't get stuck.
+                    threading.Thread(target=self._await_dns, args=(url,), daemon=True).start()
         # process ended
         with self._lock:
             self._url = None
+
+    def _await_dns(self, url: str) -> None:
+        host = url.split("//", 1)[1].split("/", 1)[0]
+        deadline = time.time() + 90
+        while not self._stopped and time.time() < deadline:
+            if _dns_resolves(host):
+                with self._lock:
+                    self._url = url
+                return
+            time.sleep(3)
+        if not self._stopped:
+            self.error = "터널 준비가 지연됩니다 (DNS). 껐다 다시 켜보세요."
 
     def public_url(self) -> Optional[str]:
         with self._lock:

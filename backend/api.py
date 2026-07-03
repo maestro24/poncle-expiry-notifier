@@ -87,6 +87,29 @@ class Api:
             "remote": pl.remote_status(),
         }
 
+    def add_test_target(self) -> dict[str, Any]:
+        """Inject a fake due row (010-1234-5678) so the send/phone flow can be
+        tested without a live Poncle scan. Test-only helper."""
+        import datetime as _dt
+        row = {
+            "id": "test-" + _dt.datetime.now().strftime("%H%M%S"),
+            "opendate": _dt.date.today().strftime("%y-%m-%d"),
+            "agency": "테스트대리점",
+            "customer": "홍길동",
+            "phone": "010-1234-5678",
+            "openhow": "번호이동",
+            "telecom": "SK텔레콤",
+            "model": "테스트모델",
+            "expiry_date": _dt.date.today().isoformat(),
+            "milestone_offset": 0,
+            "plan": "",
+            "staff": "",
+            "already_sent": False,
+        }
+        self._app.scanner.results.append(row)
+        self._app.push_results(self._app.scanner.results)
+        return {"status": "ok"}
+
     def set_phone_remote(self, enabled: bool) -> dict[str, Any]:
         pl = self._app.phone_link
         if enabled:

@@ -161,7 +161,7 @@ async function refreshPhoneStatus() {
   if (remote.enabled && remote.error) {
     rmsg.textContent = "원격 연결 실패: " + remote.error;
   } else if (remote.enabled && !st.available) {
-    rmsg.textContent = "원격 연결 준비 중… (터널 생성, 최대 10초)";
+    rmsg.textContent = "원격 연결 준비 중… (터널+DNS 준비, 최대 40초)";
   } else if (remote.enabled && st.available) {
     rmsg.textContent = "원격 연결됨 · 다른 네트워크에서도 스캔 가능";
   } else {
@@ -367,6 +367,7 @@ function bind() {
     await call("run_scan_now");
     setTimeout(() => { b.disabled = false; b.textContent = "지금 다시 스캔"; }, 1500);
   };
+  $("#btn-test-target").onclick = () => call("add_test_target");
   $("#btn-history").onclick = () => { showView("history"); loadHistory(); };
   $("#btn-settings").onclick = async () => {
     populateSettings(await call("get_settings"));
@@ -379,7 +380,7 @@ function bind() {
   $("#s-phone-remote").onchange = async (e) => {
     const on = e.currentTarget.checked;
     const msg = $("#phone-remote-msg");
-    msg.textContent = on ? "원격 연결 준비 중… (터널 생성, 최대 10초)" : "";
+    msg.textContent = on ? "원격 연결 준비 중… (터널+DNS 준비, 최대 40초)" : "";
     await call("set_phone_remote", on);
     refreshPhoneStatus();
   };
@@ -490,6 +491,7 @@ function mock(method, args) {
   if (method === "send_alert") return { status: "sent" };
   if (method === "get_phone_status") return { available: false, connected: false, qr: null, remote: { enabled: false, ready: false, error: null } };
   if (method === "set_phone_remote") return { status: "ok", remote: { enabled: !!(args && args[0]), ready: false, error: null } };
+  if (method === "add_test_target") return { status: "ok" };
   if (method === "save_settings") return { status: "ok", settings: (args && args[0]) || mockSettings() };
   if (method === "check_update") return { status: "ok", available: false, version: "1.2.0", current: "1.2.0", notes: "" };
   if (method === "apply_update") return { status: "downloading" };
