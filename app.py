@@ -25,6 +25,9 @@ from backend.session import SessionManager
 
 WINDOW_TITLE = "약정만료 알리미"
 
+# Kept alive for the whole process so the single-instance mutex stays held.
+_SINGLE_INSTANCE_HANDLE = None
+
 
 class App:
     def __init__(self) -> None:
@@ -385,6 +388,21 @@ def _ensure_icon() -> None:
     img.save(ico, sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
 
 
+def _acquire_single_instance() -> bool:
+    """Return True if we are the only instance; False if another already holds the
+    lock (the caller should exit). A named Windows mutex enforces one running copy,
+    which also keeps the exe under a single lock so the update swap can complete."""
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        global _SINGLE_INSTANCE_HANDLE
+        _SINGLE_INSTANCE_HANDLE = kernel32.CreateMutexW(None, False, "PoncleExpiryNotifier_singleton")
+        ERROR_ALREADY_EXISTS = 183
+        return kernel32.GetLastError() != ERROR_ALREADY_EXISTS
+    except Exception:
+        return True  # never block startup on a guard failure
+
+
 def _fatal_message(text: str) -> None:
     """Show a native message box (no WebView needed) and also print it."""
     print(text)
@@ -424,6 +442,11 @@ def main() -> None:
     # then relaunch from the installed location.
     from backend import installer
     if installer.ensure_installed():
+        return
+
+    # Only one running copy: a second launch exits immediately. This also protects
+    # the update swap, which needs the exe held by a single process to unlock.
+    if not _acquire_single_instance():
         return
 
     app = App()

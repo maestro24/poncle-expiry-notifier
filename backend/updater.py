@@ -121,16 +121,23 @@ def _spawn_swap(new_exe: Path, target: Path) -> None:
     """Write and launch a detached helper that waits for `target` to unlock (this
     process exiting), moves the new build over it, relaunches, then self-deletes."""
     bat = data_dir() / "update" / "apply_update.bat"
+    # Retry the move until the old exe unlocks (this process exits), but cap it so
+    # a stuck/duplicate instance can never leave the helper spinning forever. ~150
+    # tries * ~1s ≈ 2.5 min; on give-up we leave the installed exe untouched (safe).
     script = (
         "@echo off\r\n"
         "setlocal\r\n"
+        "set /a tries=0\r\n"
         ":retry\r\n"
         f'move /y "{new_exe}" "{target}" >nul 2>&1\r\n'
-        "if errorlevel 1 (\r\n"
-        "  ping 127.0.0.1 -n 2 >nul\r\n"
-        "  goto retry\r\n"
-        ")\r\n"
+        "if not errorlevel 1 goto done\r\n"
+        "set /a tries+=1\r\n"
+        "if %tries% geq 150 goto giveup\r\n"
+        "ping 127.0.0.1 -n 2 >nul\r\n"
+        "goto retry\r\n"
+        ":done\r\n"
         f'start "" "{target}"\r\n'
+        ":giveup\r\n"
         'del "%~f0"\r\n'
     )
     # cmd.exe reads the .bat using the console's code page (cp949 on Korean
