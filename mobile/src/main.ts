@@ -340,16 +340,19 @@ async function refreshSessionState(): Promise<void> {
 }
 
 /* ---------- test target ---------- */
-function addTestTarget(): void {
+async function addTestTarget(): Promise<void> {
   const now = new Date();
   const p = (n: number) => String(n).padStart(2, "0");
   const iso = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
   const yy = `${p(now.getFullYear() % 100)}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
+  // Reflect real dedup: if this (phone, expiry, offset) was already sent today,
+  // show it as 발송됨 instead of an active send button.
+  const already = await history.alreadySent("010-1234-5678", iso, 0);
   RESULTS = RESULTS.concat([{
-    id: `010-1234-5678|${iso}|0-test-${now.getTime()}`,
+    id: `010-1234-5678|${iso}|0`,
     phone: "010-1234-5678", customer: "홍길동", opendate: yy, expiry_date: iso,
     milestone_offset: 0, telecom: "SK텔레콤", agency: "테스트대리점", openhow: "번호이동",
-    plan: "", model: "테스트모델", staff: "", already_sent: false,
+    plan: "", model: "테스트모델", staff: "", already_sent: already,
   }]);
   showScreen("home");
   renderDueList();
@@ -361,7 +364,7 @@ function bind(): void {
   $("#btn-scan").onclick = () => void doScan();
   $("#btn-login").onclick = () => void doLogin();
   $("#btn-retry").onclick = () => void doScan();
-  $("#btn-test-target").onclick = addTestTarget;
+  $("#btn-test-target").onclick = () => void addTestTarget();
 
   $("#h-query").addEventListener("input", () => void loadHistory());
   $("#h-start").addEventListener("change", () => void loadHistory());
