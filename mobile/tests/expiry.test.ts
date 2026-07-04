@@ -10,7 +10,7 @@ import {
 } from "../src/domain/expiry";
 import { templateForRow } from "../src/domain/notifier";
 import { DEFAULTS } from "../src/domain/config";
-import { makeDate, toIso } from "../src/domain/plaindate";
+import { addDays, addMonths, makeDate, toIso } from "../src/domain/plaindate";
 import type { AppConfig } from "../src/domain/types";
 
 function cfg(over: Partial<AppConfig> = {}): AppConfig {
@@ -156,4 +156,44 @@ describe("candidateOpenDateBounds", () => {
     // maxTerm now 36 -> oldest opendate ~ 2023-07-04
     expect(b.sdate <= "2023-07-04").toBe(true);
   });
+});
+
+// Verify EVERY 안내 시점 option, not just D-30. 4th-of-month base date avoids any
+// month-end/leap clamp so days-until is exact.
+describe("all 안내시점 windows (당일/1/3/7/14/30)", () => {
+  const today = makeDate(2026, 7, 4);
+  const TERM = 24;
+  // A 기변 row whose 24-month contract expires exactly `d` days from today.
+  const rowExpiringIn = (d: number) => ({
+    opendate: toIso(addMonths(addDays(today, d), -TERM)),
+    openhowx: "기변",
+  });
+
+  for (const W of [0, 1, 3, 7, 14, 30]) {
+    it(`window ${W}: includes today..D-${W}, excludes D-${W + 1} and expired`, () => {
+      const c = cfg({ notify_offsets_days: [W] });
+      // sanity: the constructed row really expires when intended
+      expect(iso(computeExpiry(rowExpiringIn(W), c))).toBe(toIso(addDays(today, W)));
+
+      expect(dueWithin(rowExpiringIn(0), c, today).length).toBe(1); // expiring today
+      const edge = dueWithin(rowExpiringIn(W), c, today); // exactly at the window edge
+      expect(edge.length).toBe(1);
+      expect(edge[0][0]).toBe(W); // days-until reported correctly
+
+      expect(dueWithin(rowExpiringIn(W + 1), c, today)).toEqual([]); // one past the window
+      expect(dueWithin(rowExpiringIn(-1), c, today)).toEqual([]); // expired yesterday
+    });
+
+    it(`window ${W}: fetch bounds cover the boundary + longest/shortest term`, () => {
+      const c = cfg({ notify_offsets_days: [W] });
+      const b = candidateOpenDateBounds(c, today);
+      const covered = (odIso: string) => b.sdate <= odIso && odIso <= b.edate;
+      // expiring at the window edge with the max term (24) and the min term (6)
+      expect(covered(toIso(addMonths(addDays(today, W), -24)))).toBe(true);
+      expect(covered(toIso(addMonths(addDays(today, W), -6)))).toBe(true);
+      // expiring today with the max term (24) and the min term (6)
+      expect(covered(toIso(addMonths(today, -24)))).toBe(true);
+      expect(covered(toIso(addMonths(today, -6)))).toBe(true);
+    });
+  }
 });
