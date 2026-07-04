@@ -30,7 +30,7 @@ export async function sendAlert(item: DueItem, cfg: AppConfig, deps: SendDeps): 
   const offset = Number(item.milestone_offset || 0);
   if (!phone || !expiry) return { status: "error", error: "invalid item" };
 
-  if (await deps.history.alreadySent(phone, expiry, offset)) {
+  if (await deps.history.alreadySent(phone, expiry)) {
     return { status: "already" };
   }
 

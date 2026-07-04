@@ -1,10 +1,10 @@
 /**
  * Read open-line rows from Poncle's /open/listOpen endpoint. Port of
- * backend/poncle_client.py. Pure paging/dedup/fallback logic over an injected
- * gateway (the native Poncle bridge in the app, a fake in tests). Contract math
- * lives in expiry.ts; this module never needs to know what "expiry" means.
+ * backend/poncle_client.py, adapted to the range (look-ahead-window) scan model.
+ * Pure paging/dedup/fallback logic over an injected gateway (the native Poncle
+ * bridge in the app, a fake in tests). Contract math lives in expiry.ts.
  */
-import { PlainDate, addDays, addMonths, toIso } from "./plaindate";
+import { PlainDate, addMonths } from "./plaindate";
 import { parseOpendate } from "./expiry";
 import type { AppConfig, PoncleRow } from "./types";
 
@@ -67,34 +67,23 @@ export class PoncleClient {
     return { total: res.total, list: res.list };
   }
 
-  /** Query each candidate open date as a small +/- day window. */
-  private async fetchByOpenDates(dates: PlainDate[]): Promise<PoncleRow[]> {
+  /** Fetch every row whose opendate falls in [sdate, edate] via the server filter. */
+  private async fetchByDateRange(sdate: string, edate: string): Promise<PoncleRow[]> {
     const scale = int(this.config.page_size, 100);
-    const window = Math.max(0, int(this.config.date_window_days, 3));
     const collected = new Map<string, PoncleRow>();
-    let grandTotal = 0;
-    for (const d of dates) {
-      const sdate = toIso(addDays(d, -window));
-      const edate = toIso(addDays(d, window));
-      const first = await this.get(baseParams(0, scale, sdate, edate));
-      const total = first.total;
-      grandTotal += total;
-      if (total > scale * 8) {
-        // A few-day window should never hold hundreds of lines -> filter ignored.
-        throw new FilterIneffective(total);
-      }
-      for (const r of first.list) collected.set(rowKey(r), r);
-      let start = scale;
-      while (start < total) {
-        const pg = await this.get(baseParams(start, scale, sdate, edate));
-        for (const r of pg.list) collected.set(rowKey(r), r);
-        if (pg.list.length === 0) break;
-        start += scale;
-      }
-    }
-    if (grandTotal === 0) {
-      // Zero rows for every ~24-month-old window is suspicious -> fall back.
-      throw new FilterIneffective(0);
+    const first = await this.get(baseParams(0, scale, sdate, edate));
+    const total = first.total;
+    // If the server ignores the filter it returns the whole table, which is
+    // implausibly large for a bounded open-date range -> fall back to a
+    // client-filtered full scan instead of trusting it.
+    if (total > scale * 400) throw new FilterIneffective(total);
+    for (const r of first.list) collected.set(rowKey(r), r);
+    let start = scale;
+    while (start < total) {
+      const pg = await this.get(baseParams(start, scale, sdate, edate));
+      for (const r of pg.list) collected.set(rowKey(r), r);
+      if (pg.list.length === 0) break;
+      start += scale;
     }
     return Array.from(collected.values());
   }
@@ -129,20 +118,22 @@ export class PoncleClient {
     return Array.from(collected.values());
   }
 
-  /** Return the rows worth evaluating for today's milestones. */
-  async fetchCandidates(candidateDates: PlainDate[]): Promise<PoncleRow[]> {
-    if (candidateDates.length === 0) return [];
-    const window = Math.max(0, int(this.config.date_window_days, 3));
-    const minDate = candidateDates.reduce((a, b) => (a.getTime() < b.getTime() ? a : b));
-    const earliest = addDays(minDate, -window);
+  /**
+   * Return the rows worth evaluating for the look-ahead window. Uses the server
+   * date filter over [bounds.sdate, bounds.edate] when enabled and effective;
+   * otherwise a bounded full scan. Either way the caller re-checks each row
+   * client-side (dueWithin), so this only affects efficiency, never correctness.
+   */
+  async fetchCandidates(bounds: { sdate: string; edate: string }): Promise<PoncleRow[]> {
     if (this.config.use_server_date_filter !== false) {
       try {
-        return await this.fetchByOpenDates(candidateDates);
+        return await this.fetchByDateRange(bounds.sdate, bounds.edate);
       } catch (e) {
         if (!(e instanceof FilterIneffective)) throw e;
         // fall through to full scan
       }
     }
+    const earliest = parseOpendate(bounds.sdate) ?? today0();
     return this.fetchRecent(earliest);
   }
 }

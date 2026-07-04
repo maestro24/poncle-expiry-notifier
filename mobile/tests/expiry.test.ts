@@ -1,15 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
-  candidateOpenDates,
+  candidateOpenDateBounds,
   computeExpiry,
-  dueMilestones,
+  dueWithin,
   isStandardOpenType,
+  lookAheadDays,
   parseOpendate,
   resolveTermMonths,
 } from "../src/domain/expiry";
 import { templateForRow } from "../src/domain/notifier";
 import { DEFAULTS } from "../src/domain/config";
-import { addDays, makeDate, toIso } from "../src/domain/plaindate";
+import { makeDate, toIso } from "../src/domain/plaindate";
 import type { AppConfig } from "../src/domain/types";
 
 function cfg(over: Partial<AppConfig> = {}): AppConfig {
@@ -17,16 +18,11 @@ function cfg(over: Partial<AppConfig> = {}): AppConfig {
 }
 const CFG = cfg({ notify_offsets_days: [0] });
 const STD = { openhowx: "기변" };
-
 const iso = (d: Date | null) => (d === null ? null : toIso(d));
 
 describe("parseOpendate", () => {
-  it("two-digit year", () => {
-    expect(iso(parseOpendate("24-06-15"))).toBe("2024-06-15");
-  });
-  it("four-digit year", () => {
-    expect(iso(parseOpendate("2024-06-15"))).toBe("2024-06-15");
-  });
+  it("two-digit year", () => expect(iso(parseOpendate("24-06-15"))).toBe("2024-06-15"));
+  it("four-digit year", () => expect(iso(parseOpendate("2024-06-15"))).toBe("2024-06-15"));
   it("bad input", () => {
     expect(parseOpendate("")).toBeNull();
     expect(parseOpendate("nope")).toBeNull();
@@ -34,43 +30,51 @@ describe("parseOpendate", () => {
   });
 });
 
-describe("addMonths (via computeExpiry / candidate)", () => {
+describe("computeExpiry (month clamp)", () => {
   it("plain 24 months", () => {
     expect(iso(computeExpiry({ opendate: "24-06-15", ...STD }, CFG))).toBe("2026-06-15");
   });
   it("leap clamp: Jan 31 + 1mo -> Feb 29 (2024)", () => {
-    const c = cfg({ default_term_months: 1 });
-    expect(iso(computeExpiry({ opendate: "24-01-31", ...STD }, c))).toBe("2024-02-29");
+    expect(iso(computeExpiry({ opendate: "24-01-31", ...STD }, cfg({ default_term_months: 1 })))).toBe("2024-02-29");
   });
   it("year boundary: Dec 31 + 2mo -> Feb 28 (2025)", () => {
-    const c = cfg({ default_term_months: 2 });
-    expect(iso(computeExpiry({ opendate: "24-12-31", ...STD }, c))).toBe("2025-02-28");
+    expect(iso(computeExpiry({ opendate: "24-12-31", ...STD }, cfg({ default_term_months: 2 })))).toBe("2025-02-28");
   });
 });
 
-describe("expiry & milestones", () => {
-  it("core example: 기변 24-06-15 -> 26-06-15", () => {
-    expect(iso(computeExpiry({ opendate: "24-06-15", ...STD }, CFG))).toBe("2026-06-15");
+describe("lookAheadDays", () => {
+  it("max of offsets", () => {
+    expect(lookAheadDays(cfg({ notify_offsets_days: [30, 7, 0] }))).toBe(30);
+    expect(lookAheadDays(cfg({ notify_offsets_days: [0] }))).toBe(0);
+    expect(lookAheadDays(cfg({ notify_offsets_days: [7] }))).toBe(7);
   });
-  it("due today D-day", () => {
-    const due = dueMilestones({ opendate: "24-06-15", ...STD }, CFG, makeDate(2026, 6, 15));
-    expect(due.length).toBe(1);
-    expect(due[0][0]).toBe(0);
-    expect(iso(due[0][1])).toBe("2026-06-15");
+});
+
+describe("dueWithin (range model)", () => {
+  // 기변 opened 24-06-15 -> expiry 26-06-15.
+  const row = { opendate: "24-06-15", ...STD };
+
+  it("D-0 window: only the expiry day itself", () => {
+    const c = cfg({ notify_offsets_days: [0] });
+    expect(dueWithin(row, c, makeDate(2026, 6, 15))).toEqual([[0, expect.any(Date)]]);
+    expect(dueWithin(row, c, makeDate(2026, 6, 14))).toEqual([]); // 1 day out, window 0
   });
-  it("not due on adjacent days", () => {
-    const row = { opendate: "24-06-15", ...STD };
-    expect(dueMilestones(row, CFG, makeDate(2026, 6, 14))).toEqual([]);
-    expect(dueMilestones(row, CFG, makeDate(2026, 6, 16))).toEqual([]);
-  });
-  it("D-7 and D-day", () => {
-    const c = cfg({ notify_offsets_days: [0, 7] });
-    const row = { opendate: "24-06-15", ...STD };
-    const d7 = dueMilestones(row, c, makeDate(2026, 6, 8));
-    expect(d7.length).toBe(1);
-    expect(d7[0][0]).toBe(7);
-    const d0 = dueMilestones(row, c, makeDate(2026, 6, 15));
-    expect(d0[0][0]).toBe(0);
+
+  it("D-30 window: shows everyone expiring within 30 days, with real days-until", () => {
+    const c = cfg({ notify_offsets_days: [30] });
+    // 30 days before expiry -> included, offset 30
+    const d30 = dueWithin(row, c, makeDate(2026, 5, 16));
+    expect(d30.length).toBe(1);
+    expect(d30[0][0]).toBe(30);
+    // 12 days before -> still within window, offset reflects actual remaining days
+    const d12 = dueWithin(row, c, makeDate(2026, 6, 3));
+    expect(d12[0][0]).toBe(12);
+    // on expiry day -> offset 0, still shown
+    expect(dueWithin(row, c, makeDate(2026, 6, 15))[0][0]).toBe(0);
+    // 31 days out -> just outside the window
+    expect(dueWithin(row, c, makeDate(2026, 5, 15))).toEqual([]);
+    // already expired -> excluded
+    expect(dueWithin(row, c, makeDate(2026, 6, 16))).toEqual([]);
   });
 });
 
@@ -112,9 +116,7 @@ describe("open type classification", () => {
     expect(isStandardOpenType("신규")).toBe(true);
   });
   it("nonstandard", () => {
-    for (const t of ["번호이동", "유심신규", "유심MNP", ""]) {
-      expect(isStandardOpenType(t)).toBe(false);
-    }
+    for (const t of ["번호이동", "유심신규", "유심MNP", ""]) expect(isStandardOpenType(t)).toBe(false);
   });
 });
 
@@ -135,42 +137,23 @@ describe("template selection", () => {
   });
 });
 
-describe("candidate open dates", () => {
-  it("D-day candidate = today - 24 months", () => {
-    const cands = candidateOpenDates(CFG, makeDate(2026, 6, 15)).map(toIso);
-    expect(cands).toContain("2024-06-15");
+describe("candidateOpenDateBounds", () => {
+  it("covers every (term, day-in-window) opendate for the range", () => {
+    const c = cfg({ notify_offsets_days: [30] }); // window 30, terms {24, 6}
+    const today = makeDate(2026, 7, 4);
+    const b = candidateOpenDateBounds(c, today);
+    // oldest opendate: expiry=today, term 24 -> 2024-07-04, minus 3-day buffer
+    expect(b.sdate <= "2024-07-04").toBe(true);
+    expect(b.sdate >= "2024-06-25").toBe(true);
+    // newest opendate: expiry=today+30 (2026-08-03), term 6 -> 2026-02-03, plus buffer
+    expect(b.edate >= "2026-02-03").toBe(true);
+    expect(b.edate <= "2026-02-12").toBe(true);
   });
-  it("multi offset and terms", () => {
-    const c = cfg({ notify_offsets_days: [0, 7], agency_term_months: { X: 12 } });
-    const cands = candidateOpenDates(c, makeDate(2026, 6, 15)).map(toIso);
-    expect(cands).toContain("2024-06-15"); // 24-month D-day
-    expect(cands).toContain("2024-06-22"); // 24-month D-7
-    expect(cands).toContain("2025-06-15"); // 12-month D-day (agency override)
-    expect(cands).toContain("2025-12-15"); // 6-month D-day (nonstandard default)
-  });
-});
 
-describe("window coverage regression (day-clamp absorbed by +/- window)", () => {
-  const WINDOW = 3;
-  function covered(opendate: Date, term: number, offset: number): boolean {
-    const c = cfg({ default_term_months: term, notify_offsets_days: [offset] });
-    const row = { opendate: toIso(opendate), ...STD };
-    const expiry = computeExpiry(row, c)!;
-    const todayD = addDays(expiry, -offset);
-    expect(dueMilestones(row, c, todayD).length).toBeGreaterThan(0);
-    const cands = candidateOpenDates(c, todayD);
-    return cands.some(
-      (cnd) => Math.abs(Math.round((cnd.getTime() - opendate.getTime()) / 86400000)) <= WINDOW,
-    );
-  }
-  it("leap-day open, term 24", () => expect(covered(makeDate(2024, 2, 29), 24, 0)).toBe(true));
-  it("month-end open, term 1", () => expect(covered(makeDate(2024, 8, 31), 1, 0)).toBe(true));
-  it("month-end open, term 30", () => expect(covered(makeDate(2023, 12, 31), 30, 0)).toBe(true));
-  it("plain mid-month still covered", () => expect(covered(makeDate(2024, 6, 15), 24, 0)).toBe(true));
-  it("every month end, term 1", () => {
-    for (let m = 1; m <= 12; m++) {
-      const last = new Date(2024, m, 0).getDate();
-      expect(covered(makeDate(2024, m, last), 1, 0)).toBe(true);
-    }
+  it("agency override term widens the bounds", () => {
+    const c = cfg({ notify_offsets_days: [0], agency_term_months: { X: 36 } });
+    const b = candidateOpenDateBounds(c, makeDate(2026, 7, 4));
+    // maxTerm now 36 -> oldest opendate ~ 2023-07-04
+    expect(b.sdate <= "2023-07-04").toBe(true);
   });
 });

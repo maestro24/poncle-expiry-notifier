@@ -270,13 +270,18 @@ function buildAgencyTerms(): void {
 function buildDDayChips(): void {
   const box = $("#dday-chips");
   box.innerHTML = "";
-  const active = new Set((CFG.notify_offsets_days || []).map(Number));
+  // Single look-ahead window = the largest configured offset. Single-select: the
+  // scan shows everyone expiring within this many days.
+  const selected = Math.max(...(CFG.notify_offsets_days || [0]).map(Number));
   for (const v of DDAY_OPTIONS) {
     const b = document.createElement("button");
-    b.className = "chip" + (active.has(v) ? " on" : "");
+    b.className = "chip" + (v === selected ? " on" : "");
     b.dataset.dday = String(v);
-    b.textContent = v === 0 ? "당일" : `D-${v}`;
-    b.onclick = () => b.classList.toggle("on");
+    b.textContent = v === 0 ? "당일만" : `${v}일 전부터`;
+    b.onclick = () => {
+      for (const c of $$("#dday-chips .chip")) c.classList.remove("on");
+      b.classList.add("on");
+    };
     box.appendChild(b);
   }
 }
@@ -355,9 +360,9 @@ async function addTestTarget(): Promise<void> {
   const yy = `${p(now.getFullYear() % 100)}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
   // Reflect real dedup: if this (phone, expiry, offset) was already sent today,
   // show it as 발송됨 instead of an active send button.
-  const already = await history.alreadySent("010-1234-5678", iso, 0);
+  const already = await history.alreadySent("010-1234-5678", iso);
   RESULTS = RESULTS.concat([{
-    id: `010-1234-5678|${iso}|0`,
+    id: `010-1234-5678|${iso}`,
     phone: "010-1234-5678", customer: "홍길동", opendate: yy, expiry_date: iso,
     milestone_offset: 0, telecom: "SK텔레콤", agency: "테스트대리점", openhow: "번호이동",
     plan: "", model: "테스트모델", staff: "", already_sent: already,
@@ -393,13 +398,23 @@ function bind(): void {
     await poncleLogout(CFG);
     $("#session-state").textContent = "로그아웃됨";
   };
+  // Auto-save when both fields are filled and the user leaves a field (change),
+  // so pressing 저장 is optional.
+  const autoSaveCreds = async (): Promise<void> => {
+    const id = $<HTMLInputElement>("#s-poncle-id").value.trim();
+    const pw = $<HTMLInputElement>("#s-poncle-pw").value;
+    if (!id || !pw) return;
+    const ok = await savePoncleCredentials(id, pw);
+    $("#creds-msg").textContent = ok ? "저장됨 · 로그인 화면에서 자동 입력됩니다" : "저장 실패";
+  };
+  $("#s-poncle-id").addEventListener("change", () => void autoSaveCreds());
+  $("#s-poncle-pw").addEventListener("change", () => void autoSaveCreds());
   $("#btn-save-creds").onclick = async () => {
     const id = $<HTMLInputElement>("#s-poncle-id").value.trim();
     const pw = $<HTMLInputElement>("#s-poncle-pw").value;
     const msg = $("#creds-msg");
     if (!id || !pw) { msg.textContent = "아이디와 비밀번호를 모두 입력하세요"; return; }
     const ok = await savePoncleCredentials(id, pw);
-    $<HTMLInputElement>("#s-poncle-pw").value = ""; // don't retain plaintext in the field
     msg.textContent = ok ? "저장됨 · 로그인 화면에서 자동 입력됩니다" : "저장 실패";
   };
   $("#btn-clear-creds").onclick = async () => {

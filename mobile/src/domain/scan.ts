@@ -4,7 +4,7 @@
  * (per the configured milestones) and flags which were already alerted. Sending
  * is a separate, explicit per-row action (sender.ts).
  */
-import { candidateOpenDates, dueMilestones } from "./expiry";
+import { candidateOpenDateBounds, dueWithin } from "./expiry";
 import type { History } from "./history";
 import { PoncleClient, PoncleGateway, SessionExpired } from "./poncle-client";
 import { PlainDate, toIso, today } from "./plaindate";
@@ -67,10 +67,10 @@ export async function runScan(
   }
 
   const client = new PoncleClient(gw, cfg);
-  const dates = candidateOpenDates(cfg, todayD);
+  const bounds = candidateOpenDateBounds(cfg, todayD);
   let rows: PoncleRow[];
   try {
-    rows = await client.fetchCandidates(dates);
+    rows = await client.fetchCandidates(bounds);
   } catch (e) {
     if (e instanceof SessionExpired) {
       return { status: "session_expired", state: "session_expired", ...empty };
@@ -80,10 +80,10 @@ export async function runScan(
 
   const results: DueItem[] = [];
   for (const row of rows) {
-    for (const [offset, expiry] of dueMilestones(row, cfg, todayD)) {
+    for (const [offset, expiry] of dueWithin(row, cfg, todayD)) {
       const item = entryFromRow(row, offset, expiry);
-      item.already_sent = await history.alreadySent(item.phone, item.expiry_date, offset);
-      item.id = `${item.phone}|${item.expiry_date}|${offset}`;
+      item.already_sent = await history.alreadySent(item.phone, item.expiry_date);
+      item.id = `${item.phone}|${item.expiry_date}`;
       results.push(item);
     }
   }

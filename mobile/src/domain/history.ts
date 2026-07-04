@@ -34,8 +34,12 @@ export interface KV {
 
 const KEY = "sent_log";
 
-function dedupKey(phone: string, expiry: string, offset: number): string {
-  return `${phone}|${expiry}|${offset}`;
+// Dedup identifies a customer's contract by phone + expiry date. Offset (days
+// until expiry) is deliberately NOT part of the key: in the range scan model it
+// changes daily, and a customer should be contacted once per contract, not once
+// per day-until-expiry.
+function dedupKey(phone: string, expiry: string): string {
+  return `${phone}|${expiry}`;
 }
 
 export class History {
@@ -56,17 +60,17 @@ export class History {
     await this.kv.set(KEY, JSON.stringify(rows));
   }
 
-  async alreadySent(phone: string, expiry: string, offset: number): Promise<boolean> {
-    const key = dedupKey(phone, expiry, offset);
+  async alreadySent(phone: string, expiry: string): Promise<boolean> {
+    const key = dedupKey(phone, expiry);
     const rows = await this.all();
-    return rows.some((r) => dedupKey(r.phone, r.expiry_date, r.milestone_offset) === key);
+    return rows.some((r) => dedupKey(r.phone, r.expiry_date) === key);
   }
 
   /** Insert (dedup). Returns true if newly inserted, false if already present. */
   async recordSent(entry: Omit<SentRecord, "channel" | "sent_at">, channel: string, nowIso: string): Promise<boolean> {
     const rows = await this.all();
-    const key = dedupKey(entry.phone, entry.expiry_date, entry.milestone_offset);
-    if (rows.some((r) => dedupKey(r.phone, r.expiry_date, r.milestone_offset) === key)) {
+    const key = dedupKey(entry.phone, entry.expiry_date);
+    if (rows.some((r) => dedupKey(r.phone, r.expiry_date) === key)) {
       return false;
     }
     rows.push({ ...entry, channel, sent_at: nowIso });

@@ -39,14 +39,15 @@ function gatewayReturning(rows: PoncleRow[]) {
 }
 
 describe("History", () => {
-  it("dedup: second recordSent for same key is a no-op", async () => {
+  it("dedup on (phone, expiry) ignoring offset", async () => {
     const h = new History(memKV());
     const e = { phone: "010", customer: "김", opendate: "24-01-01", expiry_date: "2026-01-01",
-      milestone_offset: 0, telecom: "", agency: "", plan: "", model: "", openhow: "", staff: "" };
+      milestone_offset: 25, telecom: "", agency: "", plan: "", model: "", openhow: "", staff: "" };
     expect(await h.recordSent(e, "sms", "2026-07-03T09:00:00")).toBe(true);
-    expect(await h.recordSent(e, "sms", "2026-07-03T09:01:00")).toBe(false);
-    expect(await h.alreadySent("010", "2026-01-01", 0)).toBe(true);
-    expect(await h.alreadySent("010", "2026-01-01", 7)).toBe(false);
+    // same phone+expiry but a different offset (fewer days left) -> still deduped
+    expect(await h.recordSent({ ...e, milestone_offset: 3 }, "sms", "2026-07-03T09:01:00")).toBe(false);
+    expect(await h.alreadySent("010", "2026-01-01")).toBe(true);
+    expect(await h.alreadySent("010", "2026-02-01")).toBe(false); // different expiry
   });
   it("search filters by query and date", async () => {
     const h = new History(memKV());
@@ -129,6 +130,6 @@ describe("sendAlert", () => {
     const res = await sendAlert(item, cfg({ deliver_alerts: true }), { history, sendSms, nowIso });
     expect(res.status).toBe("error");
     expect(res.error).toContain("문자 전송 실패");
-    expect(await history.alreadySent(item.phone, item.expiry_date, 0)).toBe(false);
+    expect(await history.alreadySent(item.phone, item.expiry_date)).toBe(false);
   });
 });

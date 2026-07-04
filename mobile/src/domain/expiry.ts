@@ -16,8 +16,8 @@ import {
   PlainDate,
   addDays,
   addMonths,
+  daysBetween,
   makeDate,
-  sameDate,
   toIso,
 } from "./plaindate";
 import type { AppConfig, PoncleRow } from "./types";
@@ -110,50 +110,67 @@ export function normalizedOffsets(config: AppConfig): number[] {
 }
 
 /**
- * Milestones for this row that land exactly on `today`. Returns [offsetDays,
- * expiryDate] pairs. A milestone fires when today == expiry - offsetDays.
+ * Look-ahead window in days: the furthest 안내 시점. Because the app is run
+ * manually (no daily scheduler), the meaning is a RANGE, not an exact-day
+ * milestone: "show everyone expiring within N days", where N is the largest
+ * selected offset. So D-30 shows every customer expiring in the next 30 days.
  */
-export function dueMilestones(
+export function lookAheadDays(config: AppConfig): number {
+  const offs = normalizedOffsets(config); // always >= 1 element, non-negative
+  return Math.max(...offs);
+}
+
+/** All positive contract terms in play (default + nonstandard + agency overrides). */
+function positiveTerms(config: AppConfig): number[] {
+  const set = new Set<number>([
+    toInt(config.default_term_months, 24),
+    toInt(config.nonstandard_term_months, 6),
+  ]);
+  for (const months of Object.values(config.agency_term_months ?? {})) {
+    const n = typeof months === "number" ? months : parseInt(String(months), 10);
+    if (Number.isFinite(n)) set.add(n);
+  }
+  return Array.from(set).filter((t) => t > 0);
+}
+
+/**
+ * Whether this row is due within the look-ahead window. Returns a single
+ * [daysUntilExpiry, expiry] pair when 0 <= (expiry - today) <= window, else [].
+ * daysUntilExpiry is the ACTUAL remaining days (used for the {when} phrase); it
+ * is NOT part of the dedup key, so a customer shows every day until sent, once.
+ */
+export function dueWithin(
   row: PoncleRow,
   config: AppConfig,
   todayD: PlainDate,
 ): Array<[number, PlainDate]> {
   const expiry = computeExpiry(row, config);
   if (expiry === null) return [];
-  const out: Array<[number, PlainDate]> = [];
-  for (const offset of normalizedOffsets(config)) {
-    if (sameDate(todayD, addDays(expiry, -offset))) {
-      out.push([offset, expiry]);
-    }
-  }
-  return out;
+  const days = daysBetween(expiry, todayD); // expiry - today
+  if (days < 0 || days > lookAheadDays(config)) return [];
+  return [[days, expiry]];
 }
 
 /**
- * Open dates that could produce a milestone today, used to narrow the
- * server-side date filter. For every (offset, term) pair,
- *   expiry = today + offset  and  opendate = expiry - term.
- * Includes the default term and every override term.
+ * Open-date bounds (inclusive ISO) whose expiries could fall in [today,
+ * today+window], used to narrow the server date filter. A buffer absorbs the
+ * month-clamp inverse error; the client re-checks each row exactly with
+ * dueWithin, so this only affects fetch breadth, never correctness.
  */
-export function candidateOpenDates(config: AppConfig, todayD: PlainDate): PlainDate[] {
-  const terms = new Set<number>([
-    toInt(config.default_term_months, 24),
-    toInt(config.nonstandard_term_months, 6),
-  ]);
-  for (const months of Object.values(config.agency_term_months ?? {})) {
-    const n = typeof months === "number" ? months : parseInt(String(months), 10);
-    if (Number.isFinite(n)) terms.add(n);
-  }
-  const seen = new Map<number, PlainDate>();
-  for (const offset of normalizedOffsets(config)) {
-    const expiry = addDays(todayD, offset);
-    for (const term of terms) {
-      if (term <= 0) continue;
-      const d = addMonths(expiry, -term);
-      seen.set(d.getTime(), d);
-    }
-  }
-  return Array.from(seen.values()).sort((a, b) => a.getTime() - b.getTime());
+export function candidateOpenDateBounds(
+  config: AppConfig,
+  todayD: PlainDate,
+): { sdate: string; edate: string } {
+  const terms = positiveTerms(config);
+  const maxTerm = terms.length ? Math.max(...terms) : 1;
+  const minTerm = terms.length ? Math.min(...terms) : 1;
+  const window = lookAheadDays(config);
+  const buffer = Math.max(0, toInt(config.date_window_days, 3));
+  // expiry = today   -> opendate = today - term        (oldest at the max term)
+  // expiry = today+W -> opendate = (today+W) - term    (newest at the min term)
+  const minOpen = addDays(addMonths(todayD, -maxTerm), -buffer);
+  const maxOpen = addDays(addMonths(addDays(todayD, window), -minTerm), buffer);
+  return { sdate: toIso(minOpen), edate: toIso(maxOpen) };
 }
 
 /** Human phrase for the alert text, e.g. '오늘 2026-06-15' / 'D-7 (2026-06-15)'. */
