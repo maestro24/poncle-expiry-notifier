@@ -1,13 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULTS, deepMerge, migrate, withDefaults } from "../src/domain/config";
 
-const OLD_DEFAULT_TEMPLATE =
-  "[약정만료] {customer}님 ({phone}) 2년 약정 만료 {when}. " +
-  "개통 {opendate} · {telecom} · {agency}";
-
 describe("migrate", () => {
   it("prunes removed keys (channels/term_overrides/skip_zero_term)", () => {
-    const out = migrate({ channels: { desktop_toast: true }, message_template: "hi" });
+    const out = migrate({ channels: { desktop_toast: true } });
     expect(out).not.toHaveProperty("channels");
   });
   it("prunes PC-only keys", () => {
@@ -16,17 +12,13 @@ describe("migrate", () => {
     expect(out).not.toHaveProperty("autostart_enabled");
     expect(out).not.toHaveProperty("phone_remote_enabled");
   });
-  it("upgrades un-customized old default template", () => {
-    const out = migrate({ message_template: OLD_DEFAULT_TEMPLATE });
-    expect(out.message_template).toBe(DEFAULTS.message_template);
+  it("drops the retired fixed templates", () => {
+    const out = migrate({ message_template: "old", message_template_nonstandard: "old2" });
+    expect(out).not.toHaveProperty("message_template");
+    expect(out).not.toHaveProperty("message_template_nonstandard");
   });
-  it("preserves a custom template", () => {
-    const custom = "안녕하세요 {customer}님, 직접 쓴 문구입니다.";
-    expect(migrate({ message_template: custom }).message_template).toBe(custom);
-  });
-  it("shipped default is customer-facing", () => {
-    expect(DEFAULTS.message_template).toContain("{customer}");
-    expect(DEFAULTS.message_template).not.toContain("[약정만료]");
+  it("ships an empty template list by default", () => {
+    expect(DEFAULTS.templates).toEqual([]);
   });
 });
 

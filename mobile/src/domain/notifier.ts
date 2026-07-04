@@ -1,22 +1,8 @@
 /**
- * Render the outbound customer message from the template. Port of
- * backend/notifier.py. Picks one of two templates by 개통유형 (기변/신규 use the
- * standard template, everything else the non-standard one) and fills placeholders.
+ * Fill an outbound customer message template's placeholders. Port of the
+ * placeholder half of backend/notifier.py. Template SELECTION now lives in
+ * template-match.ts (conditional templates); this module only renders a body.
  */
-import { isStandardOpenType } from "./expiry";
-import type { AppConfig, PoncleRow } from "./types";
-
-/**
- * Pick the message template by 개통유형: 기변/신규 -> message_template, 그 외
- * (번호이동/유심 등) -> message_template_nonstandard (falls back to the standard
- * template if the non-standard one is empty).
- */
-export function templateForRow(config: AppConfig, row: PoncleRow): string {
-  const standard = config.message_template ?? "";
-  const openType = String(row["openhowx"] ?? row["openhow"] ?? "");
-  if (isStandardOpenType(openType)) return standard;
-  return (config.message_template_nonstandard || standard) as string;
-}
 
 /** Values available to a message template. */
 export interface MessageEntry {

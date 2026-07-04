@@ -24,16 +24,11 @@ export const DEFAULTS: AppConfig = {
   // Daily scan time (24h HH:MM, local). Foreground-only for now (scan on open).
   run_time: "09:00",
 
-  // Outbound message sent TO the customer. Two templates, chosen by 개통유형 the
-  // same way the term is. Placeholders: {customer} {telecom} {model} {expiry}
-  // {opendate} {when} (also: {phone} {agency} {plan} {staff}).
-  message_template:
-    "안녕하세요 {customer}님. 사용 중이신 {telecom} 휴대폰({model})의 " +
-    "2년 약정이 {expiry}에 만료됩니다. 기기변경/요금제 상담 원하시면 " +
-    "편하게 연락 주세요.",
-  message_template_nonstandard:
-    "안녕하세요 {customer}님. {telecom}({model}) 약정이 {expiry}에 " +
-    "만료됩니다. 재약정/번호이동/요금제 상담 원하시면 편하게 연락 주세요.",
+  // Conditional outbound templates. Empty by default: staff creates templates
+  // (with telecom/상태 conditions) under 설정 > 발송 문구 템플릿. When none match
+  // a customer the app prompts to add one. Placeholders: {customer} {telecom}
+  // {model} {expiry} {opendate} {when} {phone} {agency} {plan} {staff}.
+  templates: [],
 
   // Master switch for ACTUALLY sending the SMS. When false, "알림 보내기" only
   // records the send into 발송 이력 (staff can track handled customers).
@@ -67,13 +62,7 @@ export function deepMerge<T>(base: T, over: unknown): T {
   return out;
 }
 
-// The old PC internal-alert template; detect an un-customized old file so we can
-// upgrade it to the customer-facing default.
-const OLD_DEFAULT_TEMPLATE =
-  "[약정만료] {customer}님 ({phone}) 2년 약정 만료 {when}. " +
-  "개통 {opendate} · {telecom} · {agency}";
-
-/** Drop removed keys and upgrade un-customized old defaults. */
+/** Drop removed keys (including the retired fixed-template pair). */
 export function migrate(cfg: Record<string, unknown>): Record<string, unknown> {
   delete cfg["channels"];
   delete cfg["term_overrides"];
@@ -83,9 +72,10 @@ export function migrate(cfg: Record<string, unknown>): Record<string, unknown> {
   delete cfg["autostart_enabled"];
   delete cfg["auto_check_updates"];
   delete cfg["phone_remote_enabled"];
-  if (cfg["message_template"] === OLD_DEFAULT_TEMPLATE) {
-    cfg["message_template"] = DEFAULTS.message_template;
-  }
+  // Retired: the old fixed standard/nonstandard templates (replaced by
+  // conditional templates). Dropped on upgrade; staff re-creates templates.
+  delete cfg["message_template"];
+  delete cfg["message_template_nonstandard"];
   return cfg;
 }
 

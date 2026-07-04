@@ -9,9 +9,10 @@ import { isStandardOpenType, normalizeAgency, resolveTermMonths } from "./domain
 import { buildBackup, historyToCsv, parseBackup } from "./domain/export";
 import { History, preferencesKV } from "./domain/history";
 import { runScan, type ScanState } from "./domain/scan";
-import { dueItemToEntry, renderAlertText, sendAlert } from "./domain/sender";
+import { dueItemToEntry, renderTemplate, sendAlert } from "./domain/sender";
+import { conditionSummary, matchingTemplates } from "./domain/template-match";
 import { checkForUpdate } from "./domain/updater";
-import type { AppConfig, DueItem } from "./domain/types";
+import { STATUSES, TELECOMS, type AppConfig, type DueItem, type MessageTemplate, type StatusCode, type TelecomCode } from "./domain/types";
 import {
   clearPoncleCredentials,
   getAppVersion,
@@ -90,18 +91,24 @@ function toast(msg: string, opts: { err?: boolean; undo?: () => void } = {}): vo
 }
 
 /* ---------- navigation ---------- */
-type Screen = "home" | "history" | "settings";
+type Screen = "home" | "history" | "settings" | "terms" | "templates" | "template-edit";
+// terms/templates/template-edit are sub-screens of 설정: the bottom-nav keeps
+// 설정 highlighted while they're open.
+const SETTINGS_FAMILY: Screen[] = ["settings", "terms", "templates", "template-edit"];
+const ALL_SCREENS: Screen[] = ["home", "history", "settings", "terms", "templates", "template-edit"];
 let CURRENT: Screen = "home";
 function showScreen(name: Screen): void {
-  // Leaving settings: commit any pending edits (auto-save safety net).
+  // Leaving a screen with editable inputs: commit pending edits (auto-save net).
   if (CURRENT === "settings" && name !== "settings") void saveSettingsNow();
+  if (CURRENT === "terms" && name !== "terms") void saveTermsNow();
   CURRENT = name;
-  for (const v of ["home", "history", "settings"] as Screen[]) {
-    $(`#view-${v}`).classList.toggle("hidden", v !== name);
-  }
-  $$(".navbtn").forEach((b) => b.classList.toggle("active", b.dataset.nav === name));
+  for (const v of ALL_SCREENS) $(`#view-${v}`).classList.toggle("hidden", v !== name);
+  const navName = SETTINGS_FAMILY.includes(name) ? "settings" : name;
+  $$(".navbtn").forEach((b) => b.classList.toggle("active", b.dataset.nav === navName));
   if (name === "history") void loadHistory();
   if (name === "settings") { populateSettings(); void refreshSessionState(); void refreshCredsState(); }
+  if (name === "terms") populateTerms();
+  if (name === "templates") renderTemplateList();
 }
 
 /* ---------- state ---------- */
@@ -221,27 +228,56 @@ function markHandled(item: DueItem): void {
   renderDueList();
 }
 
-async function onSend(item: DueItem, btn: HTMLButtonElement): Promise<void> {
-  // Test rows: send (if delivery on) but never record/dedup, so they stay re-sendable.
-  if (item.test) {
-    if (CFG.deliver_alerts) { openConfirm(item); return; }
+async function onSend(item: DueItem, _btn: HTMLButtonElement): Promise<void> {
+  // Record-only test rows can't demonstrate delivery; say so and stop.
+  if (item.test && !CFG.deliver_alerts) {
     toast("테스트 대상: ‘실제 발송’이 꺼져 있어 아무것도 보내지 않습니다");
     return;
   }
-  // Real send: confirm + preview/edit first. Record-only: no confirmation needed.
-  if (CFG.deliver_alerts) {
-    openConfirm(item);
-    return;
-  }
-  btn.disabled = true;
-  const res = await sendAlert(item, CFG, { history, sendSms, nowIso });
+  // Pick the outbound template by the customer's telecom + 상태.
+  const matches = matchingTemplates(item, CFG.templates);
+  if (matches.length === 0) { openNoTemplate(); return; }
+  if (matches.length === 1) { proceedSend(item, matches[0]); return; }
+  openPicker(item, matches); // several match -> staff chooses
+}
+
+/** Render the chosen template and either confirm (real send) or record (off). */
+function proceedSend(item: DueItem, tpl: MessageTemplate): void {
+  const body = renderTemplate(item, tpl.body);
+  // Real send, or a test row while delivery is ON: confirm + preview/edit first.
+  if (CFG.deliver_alerts || item.test) { openConfirm(item, body); return; }
+  void recordOnlySend(item, body);
+}
+
+async function recordOnlySend(item: DueItem, body: string): Promise<void> {
+  const res = await sendAlert(item, CFG, { history, sendSms, nowIso }, body);
   if (res.status === "sent" || res.status === "already") {
     markHandled(item);
     toast("기록되었습니다 (실제 발송 꺼짐)");
   } else {
-    btn.disabled = false;
     toast(res.error || "실패", { err: true });
   }
+}
+
+/* ---------- template picker + no-template prompt ---------- */
+function openPicker(item: DueItem, matches: MessageTemplate[]): void {
+  $("#picker-name").textContent = item.customer || "-";
+  $("#picker-phone").textContent = item.phone;
+  const list = $("#picker-list");
+  list.innerHTML = "";
+  for (const t of matches) {
+    const b = document.createElement("button");
+    b.className = "picker-item";
+    b.innerHTML = `<div class="picker-item-name">${esc(t.name) || "(이름 없음)"}</div>
+      <div class="picker-item-sub">${esc(conditionSummary(t))}</div>
+      <div class="picker-item-preview">${esc(renderTemplate(item, t.body))}</div>`;
+    b.onclick = () => { $("#picker-modal").classList.add("hidden"); proceedSend(item, t); };
+    list.appendChild(b);
+  }
+  $("#picker-modal").classList.remove("hidden");
+}
+function openNoTemplate(): void {
+  $("#notpl-modal").classList.remove("hidden");
 }
 
 async function onSkip(item: DueItem): Promise<void> {
@@ -260,11 +296,11 @@ async function onSkip(item: DueItem): Promise<void> {
 
 /* ---------- confirm send modal (real send) ---------- */
 let confirmItem: DueItem | null = null;
-function openConfirm(item: DueItem): void {
+function openConfirm(item: DueItem, body: string): void {
   confirmItem = item;
   $("#confirm-name").textContent = item.customer || "-";
   $("#confirm-phone").textContent = item.phone;
-  $<HTMLTextAreaElement>("#confirm-text").value = renderAlertText(item, CFG);
+  $<HTMLTextAreaElement>("#confirm-text").value = body;
   $("#confirm-modal").classList.remove("hidden");
 }
 async function doConfirmSend(): Promise<void> {
@@ -447,19 +483,30 @@ function insertToken(targetId: string, token: string): void {
   ta.setSelectionRange(pos, pos);
 }
 function populateSettings(): void {
-  $<HTMLInputElement>("#s-standard-term").value = String(CFG.default_term_months ?? 24);
-  $<HTMLInputElement>("#s-nonstandard-term").value = String(CFG.nonstandard_term_months ?? 6);
-  buildAgencyTerms();
   buildDDayChips();
-  buildVarChips();
-  $<HTMLTextAreaElement>("#s-template").value = CFG.message_template || "";
-  $<HTMLTextAreaElement>("#s-template-nonstandard").value = CFG.message_template_nonstandard || "";
   $("#s-deliver").classList.toggle("on", !!CFG.deliver_alerts);
 }
 function gatherSettings(): Partial<AppConfig> {
   const offsets = $$("#dday-chips .chip")
     .filter((c) => c.classList.contains("on"))
     .map((c) => parseInt(c.dataset.dday!, 10));
+  return {
+    deliver_alerts: $("#s-deliver").classList.contains("on"),
+    notify_offsets_days: offsets.length ? offsets : [0],
+  };
+}
+/** Persist the current settings form immediately (auto-save; 저장 is optional). */
+async function saveSettingsNow(): Promise<void> {
+  CFG = await saveConfig({ ...CFG, ...gatherSettings() });
+}
+
+/* ---------- terms (약정 기간) sub-screen ---------- */
+function populateTerms(): void {
+  $<HTMLInputElement>("#s-standard-term").value = String(CFG.default_term_months ?? 24);
+  $<HTMLInputElement>("#s-nonstandard-term").value = String(CFG.nonstandard_term_months ?? 6);
+  buildAgencyTerms();
+}
+function gatherTerms(): Partial<AppConfig> {
   const nonstandard = parseInt($<HTMLInputElement>("#s-nonstandard-term").value, 10);
   const nonstandardTerm = Number.isFinite(nonstandard) ? nonstandard : 6;
   const agencyTerms: Record<string, number> = {};
@@ -469,18 +516,91 @@ function gatherSettings(): Partial<AppConfig> {
     if (Number.isFinite(v) && v !== nonstandardTerm) agencyTerms[name] = v;
   });
   return {
-    deliver_alerts: $("#s-deliver").classList.contains("on"),
     default_term_months: parseInt($<HTMLInputElement>("#s-standard-term").value, 10) || 24,
     nonstandard_term_months: nonstandardTerm,
     agency_term_months: agencyTerms,
-    notify_offsets_days: offsets.length ? offsets : [0],
-    message_template: $<HTMLTextAreaElement>("#s-template").value,
-    message_template_nonstandard: $<HTMLTextAreaElement>("#s-template-nonstandard").value,
   };
 }
-/** Persist the current settings form immediately (auto-save; 저장 is optional). */
-async function saveSettingsNow(): Promise<void> {
-  CFG = await saveConfig({ ...CFG, ...gatherSettings() });
+async function saveTermsNow(): Promise<void> {
+  CFG = await saveConfig({ ...CFG, ...gatherTerms() });
+}
+
+/* ---------- templates (발송 문구) sub-screens ---------- */
+let editingId: string | null = null;
+function newTemplateId(): string {
+  return "tpl_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+function renderTemplateList(): void {
+  const list = $("#tpl-list");
+  const tpls = CFG.templates || [];
+  $("#tpl-empty").classList.toggle("hidden", tpls.length > 0);
+  list.innerHTML = "";
+  for (const t of tpls) {
+    const card = document.createElement("div");
+    card.className = "listcard tpl-card";
+    const preview = t.body.trim().replace(/\s+/g, " ").slice(0, 80);
+    card.innerHTML = `
+      <div class="lc-top"><span class="lc-name">${esc(t.name) || "(이름 없음)"}</span>
+        <span class="lc-tag tag-open">${esc(conditionSummary(t))}</span></div>
+      <div class="lc-meta">${esc(preview) || "(내용 없음)"}</div>`;
+    card.onclick = () => openTemplateEdit(t.id);
+    list.appendChild(card);
+  }
+}
+function buildCheckChips(holderId: string, options: readonly string[], selected: string[]): void {
+  const box = $("#" + holderId);
+  box.innerHTML = "";
+  for (const opt of options) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "checkchip" + (selected.includes(opt) ? " on" : "");
+    b.dataset.val = opt;
+    b.textContent = opt;
+    b.onclick = () => b.classList.toggle("on");
+    box.appendChild(b);
+  }
+}
+function gatherCheck(holderId: string): string[] {
+  return $$("#" + holderId + " .checkchip")
+    .filter((c) => c.classList.contains("on"))
+    .map((c) => c.dataset.val!);
+}
+function openTemplateEdit(id: string | null): void {
+  editingId = id;
+  const t = id ? (CFG.templates || []).find((x) => x.id === id) : null;
+  $("#te-title").textContent = t ? "템플릿 수정" : "새 템플릿";
+  $<HTMLInputElement>("#te-name").value = t?.name || "";
+  $<HTMLTextAreaElement>("#te-body").value = t?.body || "";
+  buildCheckChips("te-telecoms", TELECOMS, t?.telecoms ?? []);
+  buildCheckChips("te-statuses", STATUSES, t?.statuses ?? []);
+  buildVarChips();
+  $("#te-msg").textContent = "";
+  $("#btn-te-delete").classList.toggle("hidden", !t);
+  showScreen("template-edit");
+}
+async function saveTemplate(): Promise<void> {
+  const name = $<HTMLInputElement>("#te-name").value.trim();
+  const body = $<HTMLTextAreaElement>("#te-body").value.trim();
+  if (!body) { $("#te-msg").textContent = "문구를 입력하세요"; return; }
+  const telecoms = gatherCheck("te-telecoms") as TelecomCode[];
+  const statuses = gatherCheck("te-statuses") as StatusCode[];
+  const tpls: MessageTemplate[] = [...(CFG.templates || [])];
+  if (editingId) {
+    const i = tpls.findIndex((x) => x.id === editingId);
+    if (i >= 0) tpls[i] = { id: editingId, name, telecoms, statuses, body };
+  } else {
+    tpls.push({ id: newTemplateId(), name, telecoms, statuses, body });
+  }
+  CFG = await saveConfig({ ...CFG, templates: tpls });
+  toast("템플릿을 저장했습니다");
+  showScreen("templates");
+}
+async function deleteTemplate(): Promise<void> {
+  if (!editingId) return;
+  const tpls = (CFG.templates || []).filter((x) => x.id !== editingId);
+  CFG = await saveConfig({ ...CFG, templates: tpls });
+  toast("템플릿을 삭제했습니다");
+  showScreen("templates");
 }
 async function refreshSessionState(): Promise<void> {
   const has = await poncleHasSession(CFG).catch(() => false);
@@ -625,6 +745,19 @@ function bind(): void {
   // Confirm-send modal
   $("#confirm-cancel").onclick = () => { $("#confirm-modal").classList.add("hidden"); confirmItem = null; };
   $("#confirm-send").onclick = () => void doConfirmSend();
+
+  // Template picker + no-template prompt
+  $("#picker-cancel").onclick = () => $("#picker-modal").classList.add("hidden");
+  $("#notpl-close").onclick = () => $("#notpl-modal").classList.add("hidden");
+  $("#btn-notpl-add").onclick = () => { $("#notpl-modal").classList.add("hidden"); openTemplateEdit(null); };
+
+  // Templates
+  $("#btn-tpl-new").onclick = () => openTemplateEdit(null);
+  $("#btn-te-save").onclick = () => void saveTemplate();
+  $("#btn-te-delete").onclick = () => void deleteTemplate();
+
+  // Terms sub-screen: auto-save any term field on change (blur).
+  $("#view-terms").addEventListener("change", () => void saveTermsNow());
 
   // History filters
   $("#h-query").addEventListener("input", () => void loadHistory());

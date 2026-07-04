@@ -102,38 +102,28 @@
     </div>
     <div class="scroll">
 
-      <div class="setcard">
-        <div class="setcard-title">약정 기간</div>
-        <div class="setcard-sub">개통 유형별 기본 개월 수와 거래처별 예외</div>
-        <div class="row-between">
-          <span>기변 · 신규 <span class="muted">(표준)</span></span>
-          <span class="num-wrap"><input type="number" id="s-standard-term" min="1" max="60" /><em>개월</em></span>
-        </div>
-        <div class="row-between">
-          <span>그 외 기본 <span class="muted">(번호이동/유심)</span></span>
-          <span class="num-wrap"><input type="number" id="s-nonstandard-term" min="0" max="60" /><em>개월</em></span>
-        </div>
-        <div class="setcard-sub" style="margin-top:12px">거래처별 예외 <span class="muted">(0 = 알림 제외)</span></div>
-        <div id="agency-terms" class="ex-list"></div>
+      <div class="setcard setcard-menu">
+        <button class="menurow" data-nav="terms">
+          <div class="menurow-txt">
+            <div class="setcard-title">약정 기간</div>
+            <div class="setcard-sub">개통 유형별 기본 개월 수와 거래처별 예외</div>
+          </div>
+          <svg class="menurow-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 6L15 12L9 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="divider"></div>
+        <button class="menurow" data-nav="templates">
+          <div class="menurow-txt">
+            <div class="setcard-title">발송 문구 템플릿</div>
+            <div class="setcard-sub">조건(통신사·상태)별 문자 문구 만들기·수정</div>
+          </div>
+          <svg class="menurow-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 6L15 12L9 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
       </div>
 
       <div class="setcard">
         <div class="setcard-title">안내 시점</div>
         <div class="setcard-sub">만료 며칠 전부터 대상 목록에 표시할지. 예: “30일 전부터” = 앞으로 30일 안에 만료되는 고객을 모두 표시.</div>
         <div class="chips" id="dday-chips"></div>
-      </div>
-
-      <div class="setcard">
-        <div class="setcard-title">발송 문구 · 기변/신규</div>
-        <div class="setcard-sub">변수를 눌러 삽입할 수 있습니다</div>
-        <div class="varchips" data-target="s-template"></div>
-        <textarea id="s-template" class="template-area" rows="4"></textarea>
-      </div>
-
-      <div class="setcard">
-        <div class="setcard-title">발송 문구 · 번호이동/유심 <span class="muted">(그 외 유형)</span></div>
-        <div class="varchips" data-target="s-template-nonstandard"></div>
-        <textarea id="s-template-nonstandard" class="template-area" rows="4"></textarea>
       </div>
 
       <div class="setcard">
@@ -199,6 +189,81 @@
     </div>
   </section>
 
+  <!-- ===== TERMS (약정 기간) ===== -->
+  <section id="view-terms" class="screen hidden">
+    <div class="topbar topbar-sub">
+      <button class="backbtn" data-nav="settings"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 18L9 12L15 6" stroke="#3a3c40" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <span class="brand">약정 기간</span>
+    </div>
+    <div class="scroll">
+      <div class="setcard">
+        <div class="setcard-title">개통 유형별 기본</div>
+        <div class="setcard-sub">개통일에 이 개월 수를 더해 만료일을 계산합니다</div>
+        <div class="row-between">
+          <span>기변 · 신규 <span class="muted">(표준)</span></span>
+          <span class="num-wrap"><input type="number" id="s-standard-term" min="1" max="60" /><em>개월</em></span>
+        </div>
+        <div class="row-between">
+          <span>그 외 기본 <span class="muted">(번호이동/유심)</span></span>
+          <span class="num-wrap"><input type="number" id="s-nonstandard-term" min="0" max="60" /><em>개월</em></span>
+        </div>
+      </div>
+      <div class="setcard">
+        <div class="setcard-title">거래처별 예외</div>
+        <div class="setcard-sub">개월 수를 다르게 쓰는 거래처만 조정 <span class="muted">(0 = 알림 제외)</span></div>
+        <div id="agency-terms" class="ex-list"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== TEMPLATES LIST (발송 문구 템플릿) ===== -->
+  <section id="view-templates" class="screen hidden">
+    <div class="topbar topbar-sub">
+      <button class="backbtn" data-nav="settings"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 18L9 12L15 6" stroke="#3a3c40" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <span class="brand">발송 문구 템플릿</span>
+    </div>
+    <div class="scroll">
+      <div class="setcard-sub" style="margin:2px 2px 10px">조건(통신사·상태)에 맞는 템플릿이 알림 보내기에서 자동으로 선택됩니다. 조건을 비우면 모든 고객에게 쓰입니다.</div>
+      <button class="btn-scan" id="btn-tpl-new">＋ 새 템플릿</button>
+      <div id="tpl-list" class="list" style="margin-top:12px"></div>
+      <div class="empty hidden" id="tpl-empty">아직 템플릿이 없습니다. “＋ 새 템플릿”으로 만들어 주세요.</div>
+    </div>
+  </section>
+
+  <!-- ===== TEMPLATE EDIT ===== -->
+  <section id="view-template-edit" class="screen hidden">
+    <div class="topbar topbar-sub">
+      <button class="backbtn" data-nav="templates"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 18L9 12L15 6" stroke="#3a3c40" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <span class="brand" id="te-title">새 템플릿</span>
+    </div>
+    <div class="scroll">
+      <div class="setcard">
+        <div class="setcard-title">템플릿 이름</div>
+        <div class="setcard-sub">목록에서 알아보기 위한 이름 (예: KT 기변용)</div>
+        <input type="text" id="te-name" class="grow" placeholder="템플릿 이름" style="width:100%;margin-top:10px" />
+      </div>
+      <div class="setcard">
+        <div class="setcard-title">통신사 조건</div>
+        <div class="setcard-sub">선택한 통신사에만 적용 <span class="muted">(아무것도 안 고르면 전체)</span></div>
+        <div class="checkchips" id="te-telecoms"></div>
+      </div>
+      <div class="setcard">
+        <div class="setcard-title">상태 조건</div>
+        <div class="setcard-sub">선택한 개통 상태에만 적용 <span class="muted">(아무것도 안 고르면 전체)</span></div>
+        <div class="checkchips" id="te-statuses"></div>
+      </div>
+      <div class="setcard">
+        <div class="setcard-title">문구</div>
+        <div class="setcard-sub">변수를 눌러 삽입할 수 있습니다</div>
+        <div class="varchips" data-target="te-body"></div>
+        <textarea id="te-body" class="template-area" rows="5"></textarea>
+      </div>
+      <button class="btn-scan" id="btn-te-save">저장</button>
+      <button class="ghost-link danger" id="btn-te-delete">이 템플릿 삭제</button>
+      <div class="save-msg center" id="te-msg"></div>
+    </div>
+  </section>
+
   <!-- ===== BOTTOM NAV ===== -->
   <nav class="bottomnav">
     <button class="navbtn active" id="nav-home" data-nav="home">
@@ -239,6 +304,31 @@
       <div class="modal-actions">
         <button class="btn-soft" id="confirm-cancel">취소</button>
         <button class="btn-dark" id="confirm-send">보내기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== TEMPLATE PICKER MODAL (multiple matches) ===== -->
+  <div id="picker-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-title">문구 선택</div>
+      <div class="modal-ver"><b id="picker-name">-</b> · <span id="picker-phone">-</span></div>
+      <div class="modal-hint">이 고객에 맞는 문구가 여러 개입니다. 보낼 문구를 고르세요.</div>
+      <div id="picker-list" class="list" style="margin-top:10px"></div>
+      <div class="modal-actions">
+        <button class="btn-soft" id="picker-cancel">취소</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== NO-TEMPLATE MODAL (no match) ===== -->
+  <div id="notpl-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-title">맞는 문구 템플릿이 없습니다</div>
+      <div class="modal-hint" id="notpl-sub">이 고객의 통신사·상태에 맞는 발송 문구가 없습니다. 템플릿을 추가하면 다음부터 자동으로 선택됩니다.</div>
+      <div class="modal-actions">
+        <button class="btn-soft" id="notpl-close">닫기</button>
+        <button class="btn-dark" id="btn-notpl-add">＋ 템플릿 추가</button>
       </div>
     </div>
   </div>

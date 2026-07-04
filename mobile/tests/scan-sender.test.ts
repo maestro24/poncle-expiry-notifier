@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { History, KV } from "../src/domain/history";
 import { runScan } from "../src/domain/scan";
-import { sendAlert } from "../src/domain/sender";
+import { renderTemplate, sendAlert } from "../src/domain/sender";
 import { DEFAULTS } from "../src/domain/config";
 import { makeDate } from "../src/domain/plaindate";
 import type { AppConfig, DueItem, PoncleRow } from "../src/domain/types";
@@ -112,28 +112,29 @@ describe("sendAlert", () => {
   it("deliver off: records only, no SMS", async () => {
     const history = new History(memKV());
     const sendSms = vi.fn();
-    const res = await sendAlert(item, cfg({ deliver_alerts: false }), { history, sendSms, nowIso });
+    const res = await sendAlert(item, cfg({ deliver_alerts: false }), { history, sendSms, nowIso }, "본문");
     expect(res.status).toBe("sent");
     expect(res.channel).toBe("record-only");
     expect(sendSms).not.toHaveBeenCalled();
     // second send is deduped
-    expect((await sendAlert(item, cfg({ deliver_alerts: false }), { history, sendSms, nowIso })).status).toBe("already");
+    expect((await sendAlert(item, cfg({ deliver_alerts: false }), { history, sendSms, nowIso }, "본문")).status).toBe("already");
   });
 
-  it("deliver on: sends the rendered SMS and records channel sms", async () => {
+  it("deliver on: sends the resolved body and records channel sms", async () => {
     const history = new History(memKV());
     const sendSms = vi.fn(async () => undefined);
-    const res = await sendAlert(item, cfg({ deliver_alerts: true, message_template: "{customer}/{telecom}/{expiry}/{when}" }),
-      { history, sendSms, nowIso });
+    const body = renderTemplate(item, "{customer}/{telecom}/{expiry}/{when}");
+    expect(body).toBe("홍길동/SK텔레콤/2026-07-03/오늘 2026-07-03");
+    const res = await sendAlert(item, cfg({ deliver_alerts: true }), { history, sendSms, nowIso }, body);
     expect(res.status).toBe("sent");
     expect(res.channel).toBe("sms");
-    expect(sendSms).toHaveBeenCalledWith("010-1111-2222", "홍길동/SK텔레콤/2026-07-03/오늘 2026-07-03");
+    expect(sendSms).toHaveBeenCalledWith("010-1111-2222", body);
   });
 
   it("deliver on: SMS failure -> error, not recorded", async () => {
     const history = new History(memKV());
     const sendSms = vi.fn(async () => { throw new Error("permission denied"); });
-    const res = await sendAlert(item, cfg({ deliver_alerts: true }), { history, sendSms, nowIso });
+    const res = await sendAlert(item, cfg({ deliver_alerts: true }), { history, sendSms, nowIso }, "본문");
     expect(res.status).toBe("error");
     expect(res.error).toContain("permission denied"); // native reason surfaced as-is
     expect(await history.alreadySent(item.phone, item.expiry_date)).toBe(false);

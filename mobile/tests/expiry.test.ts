@@ -8,7 +8,6 @@ import {
   parseOpendate,
   resolveTermMonths,
 } from "../src/domain/expiry";
-import { templateForRow } from "../src/domain/notifier";
 import { DEFAULTS } from "../src/domain/config";
 import { addDays, addMonths, makeDate, toIso } from "../src/domain/plaindate";
 import type { AppConfig } from "../src/domain/types";
@@ -117,23 +116,6 @@ describe("open type classification", () => {
   });
   it("nonstandard", () => {
     for (const t of ["번호이동", "유심신규", "유심MNP", ""]) expect(isStandardOpenType(t)).toBe(false);
-  });
-});
-
-describe("template selection", () => {
-  const TCFG = cfg({ message_template: "STD", message_template_nonstandard: "NON" });
-  it("standard types use standard template", () => {
-    expect(templateForRow(TCFG, { openhowx: "기변" })).toBe("STD");
-    expect(templateForRow(TCFG, { openhowx: "신규" })).toBe("STD");
-  });
-  it("nonstandard types use nonstandard template", () => {
-    expect(templateForRow(TCFG, { openhowx: "번호이동" })).toBe("NON");
-    expect(templateForRow(TCFG, { openhowx: "유심MNP" })).toBe("NON");
-    expect(templateForRow(TCFG, { openhowx: "유심신규" })).toBe("NON");
-  });
-  it("empty nonstandard falls back to standard", () => {
-    const c = cfg({ message_template: "STD", message_template_nonstandard: "" });
-    expect(templateForRow(c, { openhowx: "번호이동" })).toBe("STD");
   });
 });
 

@@ -4,6 +4,28 @@
  *  Poncle returns strings/numbers inconsistently; the domain layer coerces. */
 export type PoncleRow = Record<string, unknown>;
 
+/** Canonical telecom carriers a template condition can target. */
+export const TELECOMS = ["KT", "SK", "LG"] as const;
+export type TelecomCode = (typeof TELECOMS)[number];
+
+/** Canonical 개통 상태 a template condition can target. */
+export const STATUSES = ["신규", "번호이동", "기변", "유심신규", "유심MNP"] as const;
+export type StatusCode = (typeof STATUSES)[number];
+
+/**
+ * A user-defined outbound message template with optional conditions. When
+ * "알림 보내기" runs, the templates whose conditions match the customer's
+ * telecom + 상태 are offered; if several match the staff picks one, if none
+ * match the app prompts to add one. Empty condition array = matches any value.
+ */
+export interface MessageTemplate {
+  id: string;
+  name: string;
+  telecoms: TelecomCode[];
+  statuses: StatusCode[];
+  body: string;
+}
+
 /** User settings. Mirrors backend/config.py DEFAULTS. */
 export interface AppConfig {
   poncle_base_url: string;
@@ -12,8 +34,8 @@ export interface AppConfig {
   agency_term_months: Record<string, number>;
   notify_offsets_days: number[];
   run_time: string;
-  message_template: string;
-  message_template_nonstandard: string;
+  /** Conditional outbound templates (replaces the old fixed standard/nonstandard pair). */
+  templates: MessageTemplate[];
   deliver_alerts: boolean;
   use_server_date_filter: boolean;
   date_window_days: number;

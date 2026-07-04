@@ -5,7 +5,7 @@
  */
 import { formatWhen } from "./expiry";
 import type { History, SentRecord } from "./history";
-import { renderMessage, templateForRow } from "./notifier";
+import { renderMessage } from "./notifier";
 import { makeDate } from "./plaindate";
 import type { AppConfig, DueItem } from "./types";
 
@@ -23,10 +23,10 @@ export interface SendOutcome {
   error?: string;
 }
 
-/** The exact message that would be sent for this item (for preview/edit). */
-export function renderAlertText(item: DueItem, cfg: AppConfig): string {
+/** Render a chosen template body for this item (fills {customer}/{when}/... ). */
+export function renderTemplate(item: DueItem, body: string): string {
   const when = formatWhen(Number(item.milestone_offset || 0), parseIsoDate((item.expiry_date || "").trim()));
-  return renderMessage(templateForRow(cfg, item as unknown as Record<string, unknown>), item, when);
+  return renderMessage(body, item, when);
 }
 
 /** A history record shape from a due item (+ the actual message body). */
@@ -48,15 +48,16 @@ export function dueItemToEntry(item: DueItem, body = ""): Omit<SentRecord, "chan
 }
 
 /**
- * Send one alert. When `overrideText` is given (edited in the confirmation sheet)
- * it is sent verbatim; otherwise the template is rendered. The actual body is
- * stored in history so staff can later see exactly what each customer received.
+ * Send one alert with an already-resolved message `body` (the caller picks the
+ * matching template and renders it, or passes the text edited in the confirm
+ * sheet). The body is sent verbatim and stored in history so staff can later
+ * see exactly what each customer received.
  */
 export async function sendAlert(
   item: DueItem,
   cfg: AppConfig,
   deps: SendDeps,
-  overrideText?: string,
+  body: string,
 ): Promise<SendOutcome> {
   const phone = (item.phone || "").trim();
   const expiry = (item.expiry_date || "").trim();
@@ -66,7 +67,6 @@ export async function sendAlert(
     return { status: "already" };
   }
 
-  const body = overrideText ?? renderAlertText(item, cfg);
   let channel: string;
   if (cfg.deliver_alerts) {
     try {
