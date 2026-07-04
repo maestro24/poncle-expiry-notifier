@@ -27,12 +27,15 @@ public class PoncleLoginActivity extends Activity {
     public static final String EXTRA_BASE_URL = "base_url";
 
     private WebView webView;
+    private String baseUrl;
+    private boolean sawLogin = false;
+    private boolean finished = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        String baseUrl = getIntent().getStringExtra(EXTRA_BASE_URL);
+        baseUrl = getIntent().getStringExtra(EXTRA_BASE_URL);
         if (baseUrl == null || baseUrl.isEmpty()) {
             baseUrl = "https://m.poncle.co.kr";
         }
@@ -41,7 +44,7 @@ public class PoncleLoginActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
 
         Button done = new Button(this);
-        done.setText("로그인 완료");
+        done.setText("로그인 완료 (자동 감지 안 될 때)");
         done.setAllCaps(false);
         done.setBackgroundColor(Color.parseColor("#2563EB"));
         done.setTextColor(Color.WHITE);
@@ -71,10 +74,32 @@ public class PoncleLoginActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 CookieManager.getInstance().flush();
                 tryAutofill(url);
+                maybeAutoComplete(url);
             }
         });
 
         webView.loadUrl(baseUrl + "/open/mobile");
+    }
+
+    /**
+     * Auto-detect a successful login so the user doesn't have to tap 로그인 완료:
+     * once we've been on the /member/login page and then land back on a non-login
+     * Poncle page with session cookies, capture and close. The manual button stays
+     * as a fallback for any flow this heuristic misses.
+     */
+    private void maybeAutoComplete(String url) {
+        if (finished || url == null || !url.startsWith("http")) return;
+        if (url.contains("/member/login")) {
+            sawLogin = true; // on the login page; wait for the user to log in
+            return;
+        }
+        if (!sawLogin) return;              // only after a real login attempt
+        if (!url.contains("poncle")) return; // stay within Poncle (ignore captcha frames)
+        String cookie = CookieManager.getInstance().getCookie(baseUrl);
+        if (cookie != null && !cookie.trim().isEmpty()) {
+            finished = true;
+            finishOk();
+        }
     }
 
     /**
