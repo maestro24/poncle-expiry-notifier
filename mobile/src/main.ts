@@ -106,7 +106,8 @@ function actionEl(item: DueItem): HTMLElement {
   if (item.already_sent) {
     const b = document.createElement("span");
     b.className = "sent-badge";
-    b.textContent = "✓ 발송됨";
+    // Honest label: with 실제 발송 off, nothing is sent -- it is only recorded.
+    b.textContent = CFG.deliver_alerts ? "✓ 발송됨" : "✓ 기록됨(미발송)";
     return b;
   }
   const btn = document.createElement("button");
@@ -309,6 +310,19 @@ function bind(): void {
     await poncleLogout(CFG);
     $("#session-msg").textContent = "로그아웃됨";
     showLoginBanner(true);
+  };
+
+  $("#btn-test-sms").onclick = async () => {
+    const phone = $<HTMLInputElement>("#s-test-phone").value.trim();
+    const msg = $("#test-sms-msg");
+    if (!phone) { msg.textContent = "번호를 입력하세요"; return; }
+    msg.textContent = "전송 중…";
+    try {
+      await sendSms(phone, "[약정만료 알리미] 테스트 문자입니다. 정상 수신되면 발송 설정이 완료된 것입니다.");
+      msg.textContent = "전송 요청됨 ✓ 수신 확인해 보세요";
+    } catch (e) {
+      msg.textContent = "실패: " + (e instanceof Error ? e.message : String(e));
+    }
   };
 
   $("#btn-save").onclick = async () => {

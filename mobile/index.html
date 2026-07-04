@@ -111,6 +111,16 @@
         <button class="btn btn-ghost" id="btn-logout">로그아웃</button>
         <span class="save-msg" id="session-msg"></span>
       </div>
+
+      <div class="field">
+        <label>문자 발송 테스트 <span class="muted">(내 번호로)</span></label>
+        <div class="term-row">
+          <input type="tel" id="s-test-phone" placeholder="010-0000-0000" />
+          <button class="btn" id="btn-test-sms">테스트 문자</button>
+        </div>
+        <p class="hint">SEND_SMS 권한 + 실제 발송이 되는지 내 번호로 확인합니다. “실제 발송” 토글과 무관하게 바로 보냅니다. 처음 누르면 문자 권한을 물어봅니다.</p>
+        <span class="save-msg" id="test-sms-msg"></span>
+      </div>
     </div>
 
     <div class="actions">
