@@ -147,6 +147,18 @@
       </div>
 
       <div class="setcard">
+        <div class="setcard-title">폰클 자동 로그인 <span class="muted">(자동 입력)</span></div>
+        <div class="setcard-sub">아이디·비밀번호를 폰에 암호화 저장 → 로그인 화면에서 자동으로 채워집니다. 우리 서버로 전송되지 않습니다. 보안문자(reCAPTCHA)는 직접 눌러야 합니다.</div>
+        <input type="text" id="s-poncle-id" class="grow" placeholder="폰클 아이디" autocomplete="off" autocapitalize="off" style="width:100%;margin-top:12px" />
+        <input type="password" id="s-poncle-pw" class="grow" placeholder="폰클 비밀번호" autocomplete="off" style="width:100%;margin-top:8px" />
+        <div class="btnrow">
+          <button class="btn-dark" id="btn-save-creds">저장</button>
+          <button class="btn-soft" id="btn-clear-creds">지우기</button>
+        </div>
+        <div class="save-msg" id="creds-msg"></div>
+      </div>
+
+      <div class="setcard">
         <div class="setcard-title">문자 발송 테스트</div>
         <div class="setcard-sub">내 번호로 보내 문자 권한/발송을 확인 (실제 발송 토글과 무관)</div>
         <div class="btnrow">

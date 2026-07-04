@@ -58,3 +58,18 @@ export async function poncleHasSession(cfg: AppConfig): Promise<boolean> {
 export async function poncleLogout(cfg: AppConfig): Promise<void> {
   await Poncle.logout({ baseUrl: cfg.poncle_base_url });
 }
+
+/** Store Poncle id/password (encrypted, device-only) for login autofill. */
+export async function savePoncleCredentials(id: string, pw: string): Promise<boolean> {
+  return (await Poncle.saveCredentials({ id, pw })).ok;
+}
+
+/** Whether creds are stored + the saved id (never the password). */
+export async function getPoncleCredentialsMeta(): Promise<{ hasCreds: boolean; id: string }> {
+  return Poncle.getCredentialsMeta();
+}
+
+/** Delete the stored Poncle credentials. */
+export async function clearPoncleCredentials(): Promise<void> {
+  await Poncle.clearCredentials();
+}

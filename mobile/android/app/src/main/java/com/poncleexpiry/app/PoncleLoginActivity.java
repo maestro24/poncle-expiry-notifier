@@ -13,6 +13,8 @@ import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.LinearLayout;
 
+import org.json.JSONObject;
+
 /**
  * Hosts a real Poncle login in a WebView (Approach A: reuse a manual login). The
  * employee logs in normally (reCAPTCHA solved by the real page), the resulting
@@ -68,10 +70,38 @@ public class PoncleLoginActivity extends Activity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 CookieManager.getInstance().flush();
+                tryAutofill(url);
             }
         });
 
         webView.loadUrl(baseUrl + "/open/mobile");
+    }
+
+    /**
+     * On Poncle's login page, fill the id/password fields from the encrypted
+     * store. The user still solves reCAPTCHA and taps 로그인 (we never auto-submit,
+     * and never touch the captcha). Values are escaped via JSONObject.quote so
+     * arbitrary passwords can't break out of the injected JS string.
+     */
+    private void tryAutofill(String url) {
+        if (url == null || !url.contains("/member/login")) return;
+        try {
+            String id = CredStore.getId(this);
+            String pw = CredStore.getPw(this);
+            if ((id == null || id.isEmpty()) && (pw == null || pw.isEmpty())) return;
+            String js =
+                "(function(){"
+                + "var u=document.querySelector('input[name=\"userid\"]');"
+                + "var p=document.querySelector('input[name=\"userpw\"]');"
+                + "if(u){u.value=" + JSONObject.quote(id == null ? "" : id)
+                + ";u.dispatchEvent(new Event('input',{bubbles:true}));}"
+                + "if(p){p.value=" + JSONObject.quote(pw == null ? "" : pw)
+                + ";p.dispatchEvent(new Event('input',{bubbles:true}));}"
+                + "})();";
+            if (webView != null) webView.evaluateJavascript(js, null);
+        } catch (Exception e) {
+            // autofill is best-effort; ignore failures
+        }
     }
 
     private void finishOk() {

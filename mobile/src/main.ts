@@ -8,13 +8,16 @@ import { History, preferencesKV } from "./domain/history";
 import { runScan, type ScanState } from "./domain/scan";
 import { sendAlert } from "./domain/sender";
 import {
+  clearPoncleCredentials,
   getAppVersion,
+  getPoncleCredentialsMeta,
   nativePoncleGateway,
   openExternalUrl,
   poncleHasSession,
   poncleLogin,
   poncleLogout,
   requestSmsPermission,
+  savePoncleCredentials,
   sendSms,
 } from "./native/adapters";
 import { checkForUpdate } from "./domain/updater";
@@ -77,7 +80,7 @@ function showScreen(name: Screen): void {
   }
   $$(".navbtn").forEach((b) => b.classList.toggle("active", b.dataset.nav === name));
   if (name === "history") void loadHistory();
-  if (name === "settings") { populateSettings(); void refreshSessionState(); }
+  if (name === "settings") { populateSettings(); void refreshSessionState(); void refreshCredsState(); }
 }
 
 /* ---------- state ---------- */
@@ -338,6 +341,11 @@ async function refreshSessionState(): Promise<void> {
   const has = await poncleHasSession(CFG).catch(() => false);
   $("#session-state").textContent = has ? "로그인됨" : "로그아웃 상태 · 로그인이 필요합니다";
 }
+async function refreshCredsState(): Promise<void> {
+  const meta = await getPoncleCredentialsMeta().catch(() => ({ hasCreds: false, id: "" }));
+  $<HTMLInputElement>("#s-poncle-id").value = meta.id || "";
+  $("#creds-msg").textContent = meta.hasCreds ? "저장됨 · 로그인 화면에서 자동 입력됩니다" : "";
+}
 
 /* ---------- test target ---------- */
 async function addTestTarget(): Promise<void> {
@@ -384,6 +392,21 @@ function bind(): void {
   $("#btn-logout").onclick = async () => {
     await poncleLogout(CFG);
     $("#session-state").textContent = "로그아웃됨";
+  };
+  $("#btn-save-creds").onclick = async () => {
+    const id = $<HTMLInputElement>("#s-poncle-id").value.trim();
+    const pw = $<HTMLInputElement>("#s-poncle-pw").value;
+    const msg = $("#creds-msg");
+    if (!id || !pw) { msg.textContent = "아이디와 비밀번호를 모두 입력하세요"; return; }
+    const ok = await savePoncleCredentials(id, pw);
+    $<HTMLInputElement>("#s-poncle-pw").value = ""; // don't retain plaintext in the field
+    msg.textContent = ok ? "저장됨 · 로그인 화면에서 자동 입력됩니다" : "저장 실패";
+  };
+  $("#btn-clear-creds").onclick = async () => {
+    await clearPoncleCredentials();
+    $<HTMLInputElement>("#s-poncle-id").value = "";
+    $<HTMLInputElement>("#s-poncle-pw").value = "";
+    $("#creds-msg").textContent = "삭제됨";
   };
   $("#btn-test-sms").onclick = async () => {
     const phone = $<HTMLInputElement>("#s-test-phone").value.trim();

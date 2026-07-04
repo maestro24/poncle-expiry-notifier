@@ -85,6 +85,45 @@ public class PonclePlugin extends Plugin {
         call.resolve(ret);
     }
 
+    // -- saved credentials (autofill) ---------------------------------------
+    @PluginMethod
+    public void saveCredentials(PluginCall call) {
+        String id = call.getString("id", "");
+        String pw = call.getString("pw", "");
+        try {
+            CredStore.save(getContext(), id, pw);
+            JSObject r = new JSObject();
+            r.put("ok", true);
+            call.resolve(r);
+        } catch (Exception e) {
+            call.reject("failed to save credentials");
+        }
+    }
+
+    /** Returns whether creds are stored and the id (never the password). */
+    @PluginMethod
+    public void getCredentialsMeta(PluginCall call) {
+        JSObject r = new JSObject();
+        try {
+            r.put("hasCreds", CredStore.has(getContext()));
+            r.put("id", CredStore.getId(getContext()));
+        } catch (Exception e) {
+            r.put("hasCreds", false);
+            r.put("id", "");
+        }
+        call.resolve(r);
+    }
+
+    @PluginMethod
+    public void clearCredentials(PluginCall call) {
+        try {
+            CredStore.clear(getContext());
+        } catch (Exception e) {
+            // best-effort clear
+        }
+        call.resolve();
+    }
+
     // -- data ---------------------------------------------------------------
     @PluginMethod
     public void check(PluginCall call) {
