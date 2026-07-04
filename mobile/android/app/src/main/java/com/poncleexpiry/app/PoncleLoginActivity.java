@@ -7,20 +7,23 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.Toast;
 
 import org.json.JSONObject;
 
 /**
  * Hosts a real Poncle login in a WebView (Approach A: reuse a manual login). The
  * employee logs in normally (reCAPTCHA solved by the real page), the resulting
- * session cookies land in the app's CookieManager, and PonclePlugin later reuses
- * them for native authenticated requests. No password is ever read or stored by
- * us. The user taps "로그인 완료" when done.
+ * session cookies land in the app's CookieManager, and PonclePlugin reuses them
+ * for native authenticated requests. If the user typed their id/password (rather
+ * than using autofill), we capture them on submit and save them ONLY after the
+ * login succeeds, so next time they are auto-filled.
  */
 public class PoncleLoginActivity extends Activity {
 
@@ -30,6 +33,10 @@ public class PoncleLoginActivity extends Activity {
     private String baseUrl;
     private boolean sawLogin = false;
     private boolean finished = false;
+    // Credentials typed into the login form, held until login SUCCEEDS (so a
+    // wrong-password attempt is never saved), then committed to CredStore.
+    private String pendingId;
+    private String pendingPw;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -69,11 +76,14 @@ public class PoncleLoginActivity extends Activity {
         s.setDomStorageEnabled(true);
         s.setDatabaseEnabled(true);
 
+        webView.addJavascriptInterface(new CredBridge(), "AndroidCreds");
+
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageFinished(WebView view, String url) {
                 CookieManager.getInstance().flush();
                 tryAutofill(url);
+                injectCaptureHook(url);
                 maybeAutoComplete(url);
             }
         });
@@ -98,7 +108,55 @@ public class PoncleLoginActivity extends Activity {
         String cookie = CookieManager.getInstance().getCookie(baseUrl);
         if (cookie != null && !cookie.trim().isEmpty()) {
             finished = true;
+            commitPendingCreds();
             finishOk();
+        }
+    }
+
+    /** Save the id/password typed during THIS (successful) login so it can be
+     *  auto-filled next time. No-op if nothing was captured (e.g. autofill only). */
+    private void commitPendingCreds() {
+        if (pendingPw == null || pendingPw.isEmpty()) return;
+        final String id = pendingId == null ? "" : pendingId;
+        final String pw = pendingPw;
+        pendingId = null;
+        pendingPw = null;
+        try {
+            CredStore.save(this, id, pw);
+            runOnUiThread(() -> Toast.makeText(
+                this, "로그인 정보를 저장했습니다 (설정에서 지울 수 있어요)", Toast.LENGTH_SHORT).show());
+        } catch (Exception e) {
+            // best-effort; don't block login on a storage failure
+        }
+    }
+
+    /** Inject a hook on the login page that reports the typed id/password to the
+     *  native side when the form is submitted. Values are only committed later,
+     *  after login succeeds (see commitPendingCreds). */
+    private void injectCaptureHook(String url) {
+        if (url == null || !url.contains("/member/login") || webView == null) return;
+        String js =
+            "(function(){if(window.__credHook)return;window.__credHook=1;"
+            + "function g(){"
+            + "var u=document.querySelector('input[name=\"userid\"]');"
+            + "var p=document.querySelector('input[name=\"userpw\"]');"
+            + "if(p&&p.value){try{AndroidCreds.capture(u?u.value:'',p.value);}catch(e){}}}"
+            + "document.addEventListener('submit',g,true);"
+            + "document.addEventListener('click',function(){g();},true);"
+            + "var pw=document.querySelector('input[name=\"userpw\"]');"
+            + "if(pw){pw.addEventListener('keydown',function(e){if(e.key==='Enter')g();});}"
+            + "})();";
+        webView.evaluateJavascript(js, null);
+    }
+
+    /** Bridge exposed to the login page's JS to report typed credentials. */
+    private final class CredBridge {
+        @JavascriptInterface
+        public void capture(String id, String pw) {
+            if (pw != null && !pw.isEmpty()) {
+                pendingId = id == null ? "" : id;
+                pendingPw = pw;
+            }
         }
     }
 
