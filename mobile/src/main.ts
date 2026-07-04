@@ -91,7 +91,11 @@ function toast(msg: string, opts: { err?: boolean; undo?: () => void } = {}): vo
 
 /* ---------- navigation ---------- */
 type Screen = "home" | "history" | "settings";
+let CURRENT: Screen = "home";
 function showScreen(name: Screen): void {
+  // Leaving settings: commit any pending edits (auto-save safety net).
+  if (CURRENT === "settings" && name !== "settings") void saveSettingsNow();
+  CURRENT = name;
   for (const v of ["home", "history", "settings"] as Screen[]) {
     $(`#view-${v}`).classList.toggle("hidden", v !== name);
   }
@@ -216,6 +220,12 @@ function markHandled(item: DueItem): void {
 }
 
 async function onSend(item: DueItem, btn: HTMLButtonElement): Promise<void> {
+  // Test rows: send (if delivery on) but never record/dedup, so they stay re-sendable.
+  if (item.test) {
+    if (CFG.deliver_alerts) { openConfirm(item); return; }
+    toast("테스트 대상: ‘실제 발송’이 꺼져 있어 아무것도 보내지 않습니다");
+    return;
+  }
   // Real send: confirm + preview/edit first. Record-only: no confirmation needed.
   if (CFG.deliver_alerts) {
     openConfirm(item);
@@ -262,6 +272,22 @@ async function doConfirmSend(): Promise<void> {
   const btn = $<HTMLButtonElement>("#confirm-send");
   btn.disabled = true;
   btn.textContent = "전송 중…";
+
+  // Test row: send directly, do NOT record or mark handled (re-sendable).
+  if (item.test) {
+    try {
+      await sendSms(item.phone, text);
+      toast("테스트 문자를 보냈습니다");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "발송 실패", { err: true });
+    }
+    btn.disabled = false;
+    btn.textContent = "보내기";
+    $("#confirm-modal").classList.add("hidden");
+    confirmItem = null;
+    return;
+  }
+
   const res = await sendAlert(item, CFG, { history, sendSms, nowIso }, text);
   btn.disabled = false;
   btn.textContent = "보내기";
@@ -391,6 +417,7 @@ function buildDDayChips(): void {
     b.onclick = () => {
       for (const c of $$("#dday-chips .chip")) c.classList.remove("on");
       b.classList.add("on");
+      void saveSettingsNow();
     };
     box.appendChild(b);
   }
@@ -448,6 +475,10 @@ function gatherSettings(): Partial<AppConfig> {
     message_template: $<HTMLTextAreaElement>("#s-template").value,
     message_template_nonstandard: $<HTMLTextAreaElement>("#s-template-nonstandard").value,
   };
+}
+/** Persist the current settings form immediately (auto-save; 저장 is optional). */
+async function saveSettingsNow(): Promise<void> {
+  CFG = await saveConfig({ ...CFG, ...gatherSettings() });
 }
 async function refreshSessionState(): Promise<void> {
   const has = await poncleHasSession(CFG).catch(() => false);
@@ -536,28 +567,32 @@ function renderOnb(): void {
 async function finishOnb(): Promise<void> {
   $("#onboarding").classList.add("hidden");
   await Preferences.set({ key: ONB_KEY, value: "1" });
+  // The onboarding login step may have just logged in -> re-check session so the
+  // home banner clears and a scan runs without a manual tap.
+  await refreshHome();
 }
-async function maybeOnboard(): Promise<void> {
+async function maybeOnboard(): Promise<boolean> {
   const { value } = await Preferences.get({ key: ONB_KEY }).catch(() => ({ value: null }));
-  if (value === "1") return;
+  if (value === "1") return false;
   ONB_STEPS = buildOnbSteps();
   onbIndex = 0;
   renderOnb();
   $("#onboarding").classList.remove("hidden");
+  return true;
 }
 
 /* ---------- test target ---------- */
-async function addTestTarget(): Promise<void> {
+function addTestTarget(): void {
   const now = new Date();
   const p = (n: number) => String(n).padStart(2, "0");
   const iso = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
   const yy = `${p(now.getFullYear() % 100)}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
-  const already = await history.alreadySent("010-1234-5678", iso);
+  // Test rows are exempt from dedup: always sendable, never recorded.
   RESULTS = RESULTS.concat([{
-    id: `010-1234-5678|${iso}`,
-    phone: "010-1234-5678", customer: "홍길동", opendate: yy, expiry_date: iso,
+    id: `test:${now.getTime()}`,
+    phone: "010-1234-5678", customer: "홍길동(테스트)", opendate: yy, expiry_date: iso,
     milestone_offset: 0, telecom: "SK텔레콤", agency: "테스트대리점", openhow: "번호이동",
-    plan: "", model: "테스트모델", staff: "", already_sent: already,
+    plan: "", model: "테스트모델", staff: "", already_sent: false, test: true,
   }]);
   showScreen("home");
   renderDueList();
@@ -599,8 +634,16 @@ function bind(): void {
     const el = $("#s-deliver");
     const nowOn = !el.classList.contains("on");
     el.classList.toggle("on", nowOn);
+    await saveSettingsNow();
     if (nowOn) await requestSmsPermission();
   };
+  // Auto-save any settings field on change (blur), so 저장 is optional.
+  $("#view-settings").addEventListener("change", (e) => {
+    const t = e.target as HTMLElement;
+    // credentials + restore/test inputs manage their own state; skip them.
+    if (t.closest("#s-poncle-id, #s-poncle-pw, #s-test-phone, #restore-text")) return;
+    void saveSettingsNow();
+  });
   $("#btn-relogin").onclick = async () => {
     const ok = await poncleLogin(CFG);
     $("#session-state").textContent = ok ? "로그인됨" : "로그인 취소됨";
@@ -651,7 +694,7 @@ function bind(): void {
   $("#btn-restore").onclick = () => void doRestore();
 
   $("#btn-save").onclick = async () => {
-    CFG = await saveConfig({ ...CFG, ...gatherSettings() });
+    await saveSettingsNow();
     renderDueList();
     toast("저장되었습니다");
   };
@@ -680,15 +723,22 @@ async function checkUpdate(): Promise<void> {
   modal.classList.remove("hidden");
 }
 
+/** Re-evaluate session + refresh the home banner / scan. */
+async function refreshHome(): Promise<void> {
+  const hasSession = await poncleHasSession(CFG).catch(() => false);
+  showBanner(hasSession ? "none" : "session");
+  if (hasSession) await doScan();
+}
+
 /* ---------- boot ---------- */
 async function boot(): Promise<void> {
   bind();
   CFG = await loadConfig();
   renderState("idle");
-  await maybeOnboard();
-  const hasSession = await poncleHasSession(CFG).catch(() => false);
-  showBanner(hasSession ? "none" : "session");
-  if (hasSession) await doScan();
+  // Onboarding first-run gates the session check: finishOnb() calls refreshHome()
+  // after the login step, so we don't show the login banner over a fresh login.
+  const onboarding = await maybeOnboard();
+  if (!onboarding) await refreshHome();
   void checkUpdate();
 }
 

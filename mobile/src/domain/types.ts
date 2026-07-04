@@ -37,4 +37,6 @@ export interface DueItem {
   model: string;
   staff: string;
   already_sent: boolean;
+  /** Injected test row (010-1234-5678): exempt from dedup, never recorded. */
+  test?: boolean;
 }
