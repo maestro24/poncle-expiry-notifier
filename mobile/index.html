@@ -9,125 +9,173 @@
 <body>
 <div id="app">
 
-  <!-- ===== MAIN ===== -->
-  <section id="view-main" class="view">
-    <header class="topbar">
-      <span class="brand">약정만료 알리미</span>
-      <span class="state-pill" id="state-pill"><span class="dot"></span><span id="state-text">대기중</span></span>
-    </header>
-
-    <div id="login-banner" class="banner hidden">
-      <div>
-        <b>폰클 로그인이 필요합니다.</b>
-        <span>고객 목록을 읽으려면 폰클에 로그인하세요.</span>
+  <!-- ===== HOME ===== -->
+  <section id="view-home" class="screen">
+    <div class="topbar">
+      <div class="brand">
+        <span class="brandlogo">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M12 2L4 6V12C4 17 7.5 20.7 12 22C16.5 20.7 20 17 20 12V6L12 2Z" stroke="white" stroke-width="1.8" stroke-linejoin="round"/><path d="M9 12L11 14L15.5 9.5" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        <span>약정만료 알리미</span>
       </div>
-      <button class="btn btn-warn" id="btn-login">폰클 로그인</button>
     </div>
 
-    <div class="cards">
-      <div class="card"><div class="card-label">대상자</div><div class="card-num" id="c-targets">0</div></div>
-      <div class="card card-warn"><div class="card-label">미발송</div><div class="card-num" id="c-pending">0</div></div>
-      <div class="card card-ok"><div class="card-label">발송함</div><div class="card-num" id="c-sent">0</div></div>
-    </div>
-
-    <div class="results">
-      <div class="results-head">
-        <span>약정 만료 대상</span>
-        <span class="results-note" id="results-note"></span>
+    <div class="scroll">
+      <div class="statuscard">
+        <div class="statusrow">
+          <span class="badge" id="status-badge"><span class="badge-dot"></span><span id="status-label">대기중</span></span>
+          <span class="spinner hidden" id="status-spinner"></span>
+        </div>
+        <div class="statusmeta">마지막 스캔 <b id="last-scan">-</b></div>
       </div>
-      <div id="r-list"></div>
-      <div class="empty" id="r-empty">스캔 결과가 없습니다. “지금 스캔”을 눌러 주세요.</div>
-    </div>
 
-    <div class="actions">
-      <button class="btn btn-primary" id="btn-scan">지금 스캔</button>
-      <button class="btn" id="btn-history">발송 이력</button>
-      <button class="btn" id="btn-settings">설정</button>
-      <button class="btn btn-ghost" id="btn-test-target">＋테스트</button>
-      <span class="deliver-hint" id="deliver-hint"></span>
+      <div class="banner banner-warn hidden" id="session-banner">
+        <div class="banner-icon"><svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M12 2.5L1.5 21h21L12 2.5z" stroke="white" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 9V13" stroke="white" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="16.5" r="1" fill="white"/></svg></div>
+        <div class="banner-txt">
+          <div class="banner-title">폰클 로그인이 필요합니다</div>
+          <div class="banner-sub">로그인 후 다시 스캔하세요</div>
+        </div>
+        <button class="banner-btn" id="btn-login">로그인</button>
+      </div>
+
+      <div class="banner banner-error hidden" id="error-banner">
+        <div class="banner-icon"><svg width="17" height="17" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9.5" stroke="white" stroke-width="1.8"/><path d="M12 8V13" stroke="white" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="16.5" r="1" fill="white"/></svg></div>
+        <div class="banner-txt">
+          <div class="banner-title">오류가 발생했습니다</div>
+          <div class="banner-sub" id="error-sub">잠시 후 다시 시도하세요</div>
+        </div>
+        <button class="banner-btn banner-btn-red" id="btn-retry">재시도</button>
+      </div>
+
+      <div class="cards">
+        <div class="card"><div class="card-label">대상자</div><div class="card-num" id="c-targets">0</div></div>
+        <div class="card card-warn"><div class="card-label">미발송</div><div class="card-num" id="c-pending">0</div></div>
+        <div class="card card-ok"><div class="card-label">발송함</div><div class="card-num" id="c-sent">0</div></div>
+      </div>
+
+      <button class="btn-scan" id="btn-scan">지금 다시 스캔</button>
+
+      <div class="listhead"><span>약정 만료 대상</span><span class="listnote" id="list-note"></span></div>
+      <div id="due-list" class="list"></div>
+      <div class="empty hidden" id="due-empty">스캔 결과가 없습니다. “지금 다시 스캔”을 눌러 주세요.</div>
+      <button class="ghost-link" id="btn-test-target">＋ 테스트 대상 추가</button>
     </div>
   </section>
 
   <!-- ===== HISTORY ===== -->
-  <section id="view-history" class="view hidden">
-    <header class="topbar">
-      <button class="btn btn-ghost" data-back>← 뒤로</button>
-      <span class="brand">발송 이력</span>
-    </header>
-    <div class="filters">
-      <input type="search" id="h-query" placeholder="고객명 또는 번호" />
-      <input type="date" id="h-start" />
-      <span class="tilde">~</span>
-      <input type="date" id="h-end" />
-      <button class="btn btn-primary" id="btn-h-search">검색</button>
+  <section id="view-history" class="screen hidden">
+    <div class="topbar topbar-sub">
+      <button class="backbtn" data-nav="home"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 18L9 12L15 6" stroke="#3a3c40" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <span class="brand">발송 이력 조회</span>
     </div>
-    <div id="h-list"></div>
-    <div class="empty" id="h-empty">이력이 없습니다.</div>
+    <div class="scroll">
+      <div class="search">
+        <span class="searchicon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M21 21L16.5 16.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+        <input id="h-query" placeholder="고객명 또는 전화번호 검색" />
+      </div>
+      <div class="datepills">
+        <div class="datepill"><span>시작</span><input type="date" id="h-start" /></div>
+        <div class="datepill"><span>종료</span><input type="date" id="h-end" /></div>
+      </div>
+      <div class="listnote" id="h-count" style="margin:8px 2px 0"></div>
+      <div id="h-list" class="list" style="margin-top:8px"></div>
+      <div class="empty hidden" id="h-empty">검색 결과가 없습니다</div>
+    </div>
   </section>
 
   <!-- ===== SETTINGS ===== -->
-  <section id="view-settings" class="view hidden">
-    <header class="topbar">
-      <button class="btn btn-ghost" data-back>← 뒤로</button>
+  <section id="view-settings" class="screen hidden">
+    <div class="topbar topbar-sub">
+      <button class="backbtn" data-nav="home"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 18L9 12L15 6" stroke="#3a3c40" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <span class="brand">설정</span>
-    </header>
-
-    <div class="settings">
-      <div class="field">
-        <label class="inline"><input type="checkbox" id="s-deliver" /> 고객에게 실제로 문자를 전송</label>
-        <p class="hint">꺼두면 “알림 보내기”가 발송 이력에만 기록되고 실제 문자는 나가지 않습니다.</p>
-      </div>
-
-      <div class="field">
-        <label>문자 내용 · 기변/신규</label>
-        <textarea id="s-template" rows="4"></textarea>
-      </div>
-      <div class="field">
-        <label>문자 내용 · 번호이동/유심 <span class="muted">(그 외 유형)</span></label>
-        <textarea id="s-template-nonstandard" rows="4"></textarea>
-        <p class="hint">변수: {customer} {telecom} {model} {expiry} {opendate} {when}</p>
-      </div>
-
-      <div class="field">
-        <label>약정 기간 (개월)</label>
-        <div class="term-row"><span>기변 · 신규 <span class="muted">(표준)</span></span><input type="number" id="s-standard-term" min="1" max="60" /></div>
-        <div class="term-row"><span>그 외 기본 <span class="muted">(번호이동/유심)</span></span><input type="number" id="s-nonstandard-term" min="0" max="60" /></div>
-        <p class="hint">기변·신규는 표준 약정(보통 24). 나머지는 거래처마다 달라 아래에서 조정합니다. 0으로 두면 그 거래처는 제외됩니다.</p>
-        <div id="agency-terms"></div>
-      </div>
-
-      <div class="field">
-        <label>안내 시점</label>
-        <div class="checks">
-          <label><input type="checkbox" class="s-offset" value="0" /> 만료 당일 (D-day)</label>
-          <label><input type="checkbox" class="s-offset" value="7" /> 7일 전 (D-7)</label>
-          <label><input type="checkbox" class="s-offset" value="30" /> 30일 전 (D-30)</label>
-        </div>
-      </div>
-
-      <div class="field">
-        <label>폰클 세션</label>
-        <button class="btn" id="btn-relogin">폰클 다시 로그인</button>
-        <button class="btn btn-ghost" id="btn-logout">로그아웃</button>
-        <span class="save-msg" id="session-msg"></span>
-      </div>
-
-      <div class="field">
-        <label>문자 발송 테스트 <span class="muted">(내 번호로)</span></label>
-        <div class="term-row">
-          <input type="tel" id="s-test-phone" placeholder="010-0000-0000" />
-          <button class="btn" id="btn-test-sms">테스트 문자</button>
-        </div>
-        <p class="hint">SEND_SMS 권한 + 실제 발송이 되는지 내 번호로 확인합니다. “실제 발송” 토글과 무관하게 바로 보냅니다. 처음 누르면 문자 권한을 물어봅니다.</p>
-        <span class="save-msg" id="test-sms-msg"></span>
-      </div>
     </div>
+    <div class="scroll">
 
-    <div class="actions">
-      <button class="btn btn-primary" id="btn-save">저장</button>
-      <span class="save-msg" id="save-msg"></span>
+      <div class="setcard">
+        <div class="setcard-title">약정 기간</div>
+        <div class="setcard-sub">개통 유형별 기본 개월 수와 거래처별 예외</div>
+        <div class="row-between">
+          <span>기변 · 신규 <span class="muted">(표준)</span></span>
+          <span class="num-wrap"><input type="number" id="s-standard-term" min="1" max="60" /><em>개월</em></span>
+        </div>
+        <div class="row-between">
+          <span>그 외 기본 <span class="muted">(번호이동/유심)</span></span>
+          <span class="num-wrap"><input type="number" id="s-nonstandard-term" min="0" max="60" /><em>개월</em></span>
+        </div>
+        <div class="setcard-sub" style="margin-top:12px">거래처별 예외 <span class="muted">(0 = 알림 제외)</span></div>
+        <div id="agency-terms" class="ex-list"></div>
+      </div>
+
+      <div class="setcard">
+        <div class="setcard-title">안내 시점</div>
+        <div class="setcard-sub">만료 며칠 전 대상 목록에 띄울지</div>
+        <div class="chips" id="dday-chips"></div>
+      </div>
+
+      <div class="setcard">
+        <div class="setcard-title">발송 문구 · 기변/신규</div>
+        <div class="setcard-sub">변수를 눌러 삽입할 수 있습니다</div>
+        <div class="varchips" data-target="s-template"></div>
+        <textarea id="s-template" class="template-area" rows="4"></textarea>
+      </div>
+
+      <div class="setcard">
+        <div class="setcard-title">발송 문구 · 번호이동/유심 <span class="muted">(그 외 유형)</span></div>
+        <div class="varchips" data-target="s-template-nonstandard"></div>
+        <textarea id="s-template-nonstandard" class="template-area" rows="4"></textarea>
+      </div>
+
+      <div class="setcard">
+        <div class="row-between" style="margin-top:0">
+          <div>
+            <div class="setcard-title">고객에게 실제로 문자 전송</div>
+            <div class="setcard-sub">끄면 이력에만 기록되고 실제 문자는 나가지 않습니다</div>
+          </div>
+          <button class="toggle" id="s-deliver"><div class="toggle-knob"></div></button>
+        </div>
+        <div class="divider"></div>
+        <div class="row-between" style="margin-top:0">
+          <div>
+            <div class="setcard-title">폰클 세션</div>
+            <div class="setcard-sub" id="session-state">로그인 상태 확인 중…</div>
+          </div>
+        </div>
+        <div class="btnrow">
+          <button class="btn-soft" id="btn-relogin">다시 로그인</button>
+          <button class="btn-soft" id="btn-logout">로그아웃</button>
+        </div>
+      </div>
+
+      <div class="setcard">
+        <div class="setcard-title">문자 발송 테스트</div>
+        <div class="setcard-sub">내 번호로 보내 문자 권한/발송을 확인 (실제 발송 토글과 무관)</div>
+        <div class="btnrow">
+          <input type="tel" id="s-test-phone" class="grow" placeholder="010-0000-0000" />
+          <button class="btn-dark" id="btn-test-sms">테스트 문자</button>
+        </div>
+        <div class="save-msg" id="test-sms-msg"></div>
+      </div>
+
+      <button class="btn-scan" id="btn-save">저장</button>
+      <div class="save-msg center" id="save-msg"></div>
     </div>
   </section>
+
+  <!-- ===== BOTTOM NAV ===== -->
+  <nav class="bottomnav">
+    <button class="navbtn active" id="nav-home" data-nav="home">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none"><path d="M4 11L12 4L20 11" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 9.5V20H18V9.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>홈</span>
+    </button>
+    <button class="navbtn" id="nav-history" data-nav="history">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none"><rect x="4" y="5" width="16" height="15" rx="2" stroke="currentColor" stroke-width="2"/><path d="M8 3V7M16 3V7M4 10H20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <span>이력</span>
+    </button>
+    <button class="navbtn" id="nav-settings" data-nav="settings">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/><path d="M12 3V6M12 18V21M3 12H6M18 12H21M5.6 5.6L7.8 7.8M16.2 16.2L18.4 18.4M5.6 18.4L7.8 16.2M16.2 7.8L18.4 5.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <span>설정</span>
+    </button>
+  </nav>
 
 </div>
 <script type="module" src="/src/main.ts"></script>
