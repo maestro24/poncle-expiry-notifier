@@ -10,6 +10,7 @@ public class MainActivity extends BridgeActivity {
         // Register the app's native plugins before the bridge initializes.
         registerPlugin(SmsPlugin.class);
         registerPlugin(PonclePlugin.class);
+        registerPlugin(AppUpdatePlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

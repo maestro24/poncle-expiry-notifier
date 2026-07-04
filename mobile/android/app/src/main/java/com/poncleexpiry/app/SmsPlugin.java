@@ -4,6 +4,7 @@ import android.Manifest;
 import android.os.Build;
 import android.telephony.SmsManager;
 
+import com.getcapacitor.JSObject;
 import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -29,6 +30,31 @@ import java.util.ArrayList;
     }
 )
 public class SmsPlugin extends Plugin {
+
+    @PluginMethod
+    public void checkPermission(PluginCall call) {
+        JSObject r = new JSObject();
+        r.put("granted", getPermissionState("sms") == PermissionState.GRANTED);
+        call.resolve(r);
+    }
+
+    @PluginMethod
+    public void requestPermission(PluginCall call) {
+        if (getPermissionState("sms") == PermissionState.GRANTED) {
+            JSObject r = new JSObject();
+            r.put("granted", true);
+            call.resolve(r);
+            return;
+        }
+        requestPermissionForAlias("sms", call, "reqPermCallback");
+    }
+
+    @PermissionCallback
+    private void reqPermCallback(PluginCall call) {
+        JSObject r = new JSObject();
+        r.put("granted", getPermissionState("sms") == PermissionState.GRANTED);
+        call.resolve(r);
+    }
 
     @PluginMethod
     public void send(PluginCall call) {

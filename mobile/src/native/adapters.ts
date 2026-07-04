@@ -4,6 +4,7 @@
  */
 import type { PoncleGateway } from "../domain/poncle-client";
 import type { AppConfig } from "../domain/types";
+import { AppUpdate } from "./appupdate";
 import { Poncle } from "./poncle";
 import { Sms } from "./sms";
 
@@ -19,6 +20,26 @@ export function nativePoncleGateway(cfg: AppConfig): PoncleGateway {
 /** Deliver an SMS from this device via the native Sms plugin. */
 export async function sendSms(phone: string, text: string): Promise<void> {
   await Sms.send({ phone, text });
+}
+
+/** Whether SEND_SMS is currently granted. */
+export async function checkSmsPermission(): Promise<boolean> {
+  return (await Sms.checkPermission()).granted;
+}
+
+/** Prompt for SEND_SMS (no-op if already granted). Returns the resulting state. */
+export async function requestSmsPermission(): Promise<boolean> {
+  return (await Sms.requestPermission()).granted;
+}
+
+/** Installed app versionName (e.g. "1.0.0"). */
+export async function getAppVersion(): Promise<string> {
+  return (await AppUpdate.getVersion()).version;
+}
+
+/** Open a URL in the system browser / download manager (for APK download). */
+export async function openExternalUrl(url: string): Promise<void> {
+  await AppUpdate.openUrl({ url });
 }
 
 /** Launch the in-app Poncle login WebView. Returns true if a session was captured. */

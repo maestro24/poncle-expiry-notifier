@@ -8,12 +8,16 @@ import { History, preferencesKV } from "./domain/history";
 import { runScan, type ScanState } from "./domain/scan";
 import { sendAlert } from "./domain/sender";
 import {
+  getAppVersion,
   nativePoncleGateway,
+  openExternalUrl,
   poncleHasSession,
   poncleLogin,
   poncleLogout,
+  requestSmsPermission,
   sendSms,
 } from "./native/adapters";
+import { checkForUpdate } from "./domain/updater";
 import type { AppConfig, DueItem } from "./domain/types";
 
 const $ = <T extends HTMLElement = HTMLElement>(s: string): T => document.querySelector(s) as T;
@@ -363,7 +367,13 @@ function bind(): void {
   $("#h-start").addEventListener("change", () => void loadHistory());
   $("#h-end").addEventListener("change", () => void loadHistory());
 
-  $("#s-deliver").onclick = () => $("#s-deliver").classList.toggle("on");
+  $("#s-deliver").onclick = async () => {
+    const el = $("#s-deliver");
+    const nowOn = !el.classList.contains("on");
+    el.classList.toggle("on", nowOn);
+    // Turning "실제 발송" on is the moment SMS permission matters -> prompt now.
+    if (nowOn) await requestSmsPermission();
+  };
   $("#btn-relogin").onclick = async () => {
     const ok = await poncleLogin(CFG);
     $("#session-state").textContent = ok ? "로그인됨" : "로그인 취소됨";
@@ -394,14 +404,35 @@ function bind(): void {
   };
 }
 
+/* ---------- update ---------- */
+async function checkUpdate(): Promise<void> {
+  const current = await getAppVersion().catch(() => "");
+  if (!current || current === "0.0.0") return; // web fallback / unknown
+  const info = await checkForUpdate(current);
+  if (!info.available || !info.url) return;
+  $("#upd-current").textContent = "v" + current;
+  $("#upd-latest").textContent = "v" + info.version;
+  $("#upd-notes").textContent = info.notes || "";
+  const modal = $("#update-modal");
+  $("#upd-later").onclick = () => modal.classList.add("hidden");
+  $("#upd-now").onclick = () => {
+    void openExternalUrl(info.url);
+    modal.classList.add("hidden");
+  };
+  modal.classList.remove("hidden");
+}
+
 /* ---------- boot ---------- */
 async function boot(): Promise<void> {
   bind();
   CFG = await loadConfig();
   renderState("idle");
+  // First launch: prompt for SMS permission up front (no-op if already granted).
+  void requestSmsPermission();
   const hasSession = await poncleHasSession(CFG).catch(() => false);
   showBanner(hasSession ? "none" : "session");
   if (hasSession) await doScan();
+  void checkUpdate();
 }
 
 void boot();

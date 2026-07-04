@@ -9,6 +9,10 @@ export interface SmsPlugin {
   /** Send an SMS to `phone` with `text`. Rejects if the permission is denied or
    *  the send fails. */
   send(options: { phone: string; text: string }): Promise<void>;
+  /** Whether SEND_SMS is currently granted. */
+  checkPermission(): Promise<{ granted: boolean }>;
+  /** Prompt for SEND_SMS (no-op if already granted). Returns the new state. */
+  requestPermission(): Promise<{ granted: boolean }>;
 }
 
 export const Sms = registerPlugin<SmsPlugin>("Sms", {
@@ -17,5 +21,7 @@ export const Sms = registerPlugin<SmsPlugin>("Sms", {
     send: async () => {
       throw new Error("SMS is only available on the Android device");
     },
+    checkPermission: async () => ({ granted: false }),
+    requestPermission: async () => ({ granted: false }),
   }),
 });
