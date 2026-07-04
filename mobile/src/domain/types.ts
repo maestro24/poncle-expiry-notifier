@@ -4,8 +4,24 @@
  *  Poncle returns strings/numbers inconsistently; the domain layer coerces. */
 export type PoncleRow = Record<string, unknown>;
 
-/** Canonical telecom carriers a template condition can target. */
-export const TELECOMS = ["KT", "SK", "LG"] as const;
+/**
+ * Telecom carriers a template condition can target. These are Poncle's exact
+ * telecomx display values (the 10 distinct carriers seen in the open list), each
+ * an independent option: KT/SK/LG main lines plus their MVNO/기타 brands and
+ * 스카이라이프. Matched by exact string equality against the row's telecomx.
+ */
+export const TELECOMS = [
+  "KT",
+  "SK텔레콤",
+  "LG유플러스",
+  "U+알뜰모바일",
+  "KT엠모바일",
+  "SK텔링크",
+  "스카이라이프",
+  "기타통신사(KT)",
+  "기타통신사(SKT)",
+  "기타통신사(LGT)",
+] as const;
 export type TelecomCode = (typeof TELECOMS)[number];
 
 /** Canonical 개통 상태 a template condition can target. */

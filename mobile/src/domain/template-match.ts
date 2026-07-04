@@ -7,25 +7,38 @@
  * (telecomx / openhowx) are first normalized to the canonical codes so minor
  * spelling/format differences ("SK텔레콤" vs "SKT", "기기변경" vs "기변") match.
  */
-import type { MessageTemplate, StatusCode, TelecomCode } from "./types";
+import { TELECOMS, type MessageTemplate, type StatusCode, type TelecomCode } from "./types";
 
 interface Matchable {
   telecom?: string;
   openhow?: string;
 }
 
+const TELECOM_SET: ReadonlySet<string> = new Set(TELECOMS);
+// Poncle also carries a short `telecom` code; if a row ever lacks the telecomx
+// display (the app falls back to the code), map the unambiguous codes to their
+// canonical display. "ETC" is intentionally absent: it maps to three distinct
+// 기타통신사(...) displays and can't be resolved from the code alone.
+const CODE_TO_DISPLAY: Record<string, TelecomCode> = {
+  KT: "KT",
+  SKT: "SK텔레콤",
+  LGT: "LG유플러스",
+  LGUMOBI: "U+알뜰모바일",
+  KTMMOBILE: "KT엠모바일",
+  SKTELINK: "SK텔링크",
+  SKYLIFE: "스카이라이프",
+};
+
 /**
- * Normalize a Poncle telecom string to KT / SK / LG. Returns "" when the
- * carrier can't be determined (an unknown carrier only matches wildcard
- * templates, never a template that pins a specific carrier).
+ * Resolve a Poncle telecom value to one of the 10 canonical carriers by exact
+ * match on the telecomx display (or the unambiguous short code). Returns "" for
+ * anything unrecognized, so an unknown carrier only matches wildcard templates.
  */
 export function normalizeTelecom(raw: string): TelecomCode | "" {
-  const s = String(raw ?? "").toUpperCase().replace(/\s+/g, "");
+  const s = String(raw ?? "").trim();
   if (!s) return "";
-  // SK before KT: "SKT" contains the substring "KT" but is an SK carrier.
-  if (s.includes("SK") || s.includes("에스케이")) return "SK";
-  if (s.includes("KT") || s.includes("케이티") || s.includes("올레")) return "KT";
-  if (s.includes("LG") || s.includes("U+") || s.includes("유플러스") || s.includes("엘지")) return "LG";
+  if (TELECOM_SET.has(s)) return s as TelecomCode;
+  if (CODE_TO_DISPLAY[s]) return CODE_TO_DISPLAY[s];
   return "";
 }
 

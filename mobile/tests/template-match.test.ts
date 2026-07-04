@@ -13,18 +13,28 @@ function tpl(over: Partial<MessageTemplate> = {}): MessageTemplate {
 }
 
 describe("normalizeTelecom", () => {
-  it("maps carrier variants", () => {
-    expect(normalizeTelecom("SK텔레콤")).toBe("SK");
-    expect(normalizeTelecom("SKT")).toBe("SK");
+  it("keeps the 10 exact display values", () => {
     expect(normalizeTelecom("KT")).toBe("KT");
-    expect(normalizeTelecom("올레 KT")).toBe("KT");
-    expect(normalizeTelecom("LG유플러스")).toBe("LG");
-    expect(normalizeTelecom("LG U+")).toBe("LG");
-    expect(normalizeTelecom("엘지유플러스")).toBe("LG");
+    expect(normalizeTelecom("SK텔레콤")).toBe("SK텔레콤");
+    expect(normalizeTelecom("LG유플러스")).toBe("LG유플러스");
+    expect(normalizeTelecom("U+알뜰모바일")).toBe("U+알뜰모바일");
+    expect(normalizeTelecom("KT엠모바일")).toBe("KT엠모바일");
+    expect(normalizeTelecom("SK텔링크")).toBe("SK텔링크");
+    expect(normalizeTelecom("스카이라이프")).toBe("스카이라이프");
+    expect(normalizeTelecom("기타통신사(KT)")).toBe("기타통신사(KT)");
+    expect(normalizeTelecom("기타통신사(SKT)")).toBe("기타통신사(SKT)");
+    expect(normalizeTelecom("기타통신사(LGT)")).toBe("기타통신사(LGT)");
   });
-  it("returns '' for unknown/blank", () => {
+  it("maps unambiguous short codes to the display", () => {
+    expect(normalizeTelecom("SKT")).toBe("SK텔레콤");
+    expect(normalizeTelecom("LGUMOBI")).toBe("U+알뜰모바일");
+    expect(normalizeTelecom("SKYLIFE")).toBe("스카이라이프");
+    expect(normalizeTelecom(" KT ")).toBe("KT"); // trims
+  });
+  it("returns '' for unknown/blank/ambiguous", () => {
     expect(normalizeTelecom("")).toBe("");
     expect(normalizeTelecom("알뜰폰")).toBe("");
+    expect(normalizeTelecom("ETC")).toBe(""); // 3 displays share this code
   });
 });
 
@@ -59,20 +69,23 @@ describe("templateMatches", () => {
     expect(templateMatches(item, tpl())).toBe(true);
     expect(templateMatches({ telecom: "", openhow: "" }, tpl())).toBe(true);
   });
-  it("telecom group OR", () => {
-    expect(templateMatches(item, tpl({ telecoms: ["SK", "KT"] }))).toBe(true);
+  it("telecom group OR (exact carriers)", () => {
+    expect(templateMatches(item, tpl({ telecoms: ["SK텔레콤", "KT"] }))).toBe(true);
     expect(templateMatches(item, tpl({ telecoms: ["KT"] }))).toBe(false);
+    // MVNO brands are independent from their parent carrier
+    expect(templateMatches({ telecom: "SK텔링크", openhow: "기변" }, tpl({ telecoms: ["SK텔레콤"] }))).toBe(false);
+    expect(templateMatches({ telecom: "스카이라이프", openhow: "기변" }, tpl({ telecoms: ["스카이라이프"] }))).toBe(true);
   });
   it("status group OR", () => {
     expect(templateMatches(item, tpl({ statuses: ["기변", "신규"] }))).toBe(true);
     expect(templateMatches(item, tpl({ statuses: ["신규"] }))).toBe(false);
   });
   it("groups AND", () => {
-    expect(templateMatches(item, tpl({ telecoms: ["SK"], statuses: ["기변"] }))).toBe(true);
-    expect(templateMatches(item, tpl({ telecoms: ["SK"], statuses: ["신규"] }))).toBe(false);
+    expect(templateMatches(item, tpl({ telecoms: ["SK텔레콤"], statuses: ["기변"] }))).toBe(true);
+    expect(templateMatches(item, tpl({ telecoms: ["SK텔레콤"], statuses: ["신규"] }))).toBe(false);
   });
   it("unknown carrier never matches a carrier-pinned template", () => {
-    expect(templateMatches({ telecom: "알뜰폰", openhow: "기변" }, tpl({ telecoms: ["SK"] }))).toBe(false);
+    expect(templateMatches({ telecom: "알뜰폰", openhow: "기변" }, tpl({ telecoms: ["SK텔레콤"] }))).toBe(false);
     // but still matches a wildcard-telecom template
     expect(templateMatches({ telecom: "알뜰폰", openhow: "기변" }, tpl({ statuses: ["기변"] }))).toBe(true);
   });
@@ -80,7 +93,7 @@ describe("templateMatches", () => {
 
 describe("matchingTemplates", () => {
   it("returns matches in list order", () => {
-    const a = tpl({ id: "a", telecoms: ["SK"] });
+    const a = tpl({ id: "a", telecoms: ["SK텔레콤"] });
     const b = tpl({ id: "b" }); // wildcard
     const c = tpl({ id: "c", telecoms: ["KT"] });
     const out = matchingTemplates({ telecom: "SK텔레콤", openhow: "기변" }, [a, b, c]);
@@ -94,6 +107,6 @@ describe("matchingTemplates", () => {
 describe("conditionSummary", () => {
   it("labels wildcards and lists", () => {
     expect(conditionSummary(tpl())).toBe("모든 통신사 / 모든 상태");
-    expect(conditionSummary(tpl({ telecoms: ["KT", "SK"], statuses: ["기변"] }))).toBe("KT·SK / 기변");
+    expect(conditionSummary(tpl({ telecoms: ["KT", "SK텔레콤"], statuses: ["기변"] }))).toBe("KT·SK텔레콤 / 기변");
   });
 });
