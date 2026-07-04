@@ -130,7 +130,7 @@ public class PonclePlugin extends Plugin {
         final String baseUrl = base(call);
         io.execute(() -> {
             try {
-                JSONObject data = getListOpen(baseUrl, probeParams());
+                JSONObject data = getJson(baseUrl, "/open/listOpen", "/open/mobile", probeParams());
                 JSObject ret = new JSObject();
                 ret.put("value", data != null && data.has("list"));
                 call.resolve(ret);
@@ -144,6 +144,17 @@ public class PonclePlugin extends Plugin {
 
     @PluginMethod
     public void listOpen(PluginCall call) {
+        runList(call, "/open/listOpen", "/open/mobile");
+    }
+
+    @PluginMethod
+    public void listPending(PluginCall call) {
+        runList(call, "/pending/listPending", "/pending/pending");
+    }
+
+    /** Shared authenticated list GET: extract params, fetch off the UI thread,
+     *  map the response to {ok, netError, total, list} (same shape for both endpoints). */
+    private void runList(PluginCall call, String path, String referer) {
         final String baseUrl = base(call);
         JSObject paramsObj = call.getObject("params", new JSObject());
         final java.util.Map<String, String> params = new java.util.LinkedHashMap<>();
@@ -155,7 +166,7 @@ public class PonclePlugin extends Plugin {
         io.execute(() -> {
             JSObject ret = new JSObject();
             try {
-                JSONObject data = getListOpen(baseUrl, params);
+                JSONObject data = getJson(baseUrl, path, referer, params);
                 if (data == null || !data.has("list")) {
                     // 200 but not data JSON == the login page == session expired.
                     ret.put("ok", false);
@@ -184,9 +195,10 @@ public class PonclePlugin extends Plugin {
     }
 
     // -- http ---------------------------------------------------------------
-    /** GET /open/listOpen; return the parsed JSON object if it looks like data
-     *  (a JSON object with a "list"), else null (login page / session expired). */
-    private JSONObject getListOpen(String baseUrl, Map<String, String> params) throws Exception {
+    /** Authenticated GET of a Poncle list endpoint; return the parsed JSON object
+     *  if it looks like data (a JSON object with a "list"), else null (login page /
+     *  session expired). `path` e.g. "/open/listOpen"; `referer` e.g. "/open/mobile". */
+    private JSONObject getJson(String baseUrl, String path, String referer, Map<String, String> params) throws Exception {
         StringBuilder qs = new StringBuilder();
         for (Map.Entry<String, String> e : params.entrySet()) {
             if (qs.length() > 0) qs.append('&');
@@ -194,7 +206,7 @@ public class PonclePlugin extends Plugin {
               .append('=')
               .append(URLEncoder.encode(e.getValue() == null ? "" : e.getValue(), "UTF-8"));
         }
-        URL url = new URL(baseUrl + "/open/listOpen?" + qs);
+        URL url = new URL(baseUrl + path + "?" + qs);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setInstanceFollowRedirects(true);
         conn.setConnectTimeout(20000);
@@ -202,7 +214,7 @@ public class PonclePlugin extends Plugin {
         conn.setRequestProperty("User-Agent", UA);
         conn.setRequestProperty("Accept", "application/json, text/javascript, */*; q=0.01");
         conn.setRequestProperty("X-Requested-With", "XMLHttpRequest");
-        conn.setRequestProperty("Referer", baseUrl + "/open/mobile");
+        conn.setRequestProperty("Referer", baseUrl + referer);
         conn.setRequestProperty("Accept-Language", "ko-KR,ko;q=0.9,en;q=0.8");
         String cookie = CookieManager.getInstance().getCookie(baseUrl);
         if (cookie != null && !cookie.isEmpty()) {

@@ -36,6 +36,8 @@ export interface PonclePlugin {
   check(options?: { baseUrl?: string }): Promise<{ value: boolean }>;
   /** One authenticated GET /open/listOpen with the given query params. */
   listOpen(options: { baseUrl?: string; params: Record<string, string> }): Promise<ListOpenResult>;
+  /** One authenticated GET /pending/listPending (미결관리) with the given params. */
+  listPending(options: { baseUrl?: string; params: Record<string, string> }): Promise<ListOpenResult>;
 
   // -- saved credentials (WebView login autofill) -------------------------
   /** Store id/password encrypted on-device for login autofill. */
@@ -54,6 +56,7 @@ export const Poncle = registerPlugin<PonclePlugin>("Poncle", {
     hasSession: async () => ({ value: false }),
     check: async () => ({ value: false }),
     listOpen: async () => ({ ok: false, total: 0, list: [] as PoncleRow[] }),
+    listPending: async () => ({ ok: false, total: 0, list: [] as PoncleRow[] }),
     saveCredentials: async () => ({ ok: false }),
     getCredentialsMeta: async () => ({ hasCreds: false, id: "" }),
     clearCredentials: async () => undefined,

@@ -188,6 +188,11 @@ function dueCard(item: DueItem): HTMLElement {
   return card;
 }
 function whyText(item: DueItem): string {
+  // 요금제 유지일 기준으로 뜬 건은 약정 계산이 아니라 폰클 미결의 유지일을 그대로 씀.
+  if (item.source === "keepdate") {
+    const dn = item.milestone_offset === 0 ? "오늘" : `${item.milestone_offset}일 전`;
+    return `요금제 유지일 기준 (미결 등록)\n유지일 ${item.expiry_date} · ${dn}`;
+  }
   const term = resolveTermMonths({ openhowx: item.openhow, agencytitle: item.agency }, CFG);
   let basis: string;
   if (isStandardOpenType(item.openhow)) {

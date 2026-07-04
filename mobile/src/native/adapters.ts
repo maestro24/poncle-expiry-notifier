@@ -14,6 +14,7 @@ export function nativePoncleGateway(cfg: AppConfig): PoncleGateway {
   return {
     check: async () => (await Poncle.check({ baseUrl })).value,
     listOpen: async (params) => Poncle.listOpen({ baseUrl, params }),
+    listPending: async (params) => Poncle.listPending({ baseUrl, params }),
   };
 }
 

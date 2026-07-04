@@ -21,12 +21,20 @@ class FilterIneffective extends Error {
   }
 }
 
-/** One authenticated GET returning {ok,total,list,netError?}. Native plugin implements it. */
+/** Result shape shared by the list endpoints. */
+export interface ListResult {
+  ok: boolean;
+  total: number;
+  list: PoncleRow[];
+  netError?: boolean;
+}
+
+/** Authenticated GETs returning {ok,total,list,netError?}. Native plugin implements them. */
 export interface PoncleGateway {
   check(): Promise<boolean>;
-  listOpen(
-    params: Record<string, string>,
-  ): Promise<{ ok: boolean; total: number; list: PoncleRow[]; netError?: boolean }>;
+  listOpen(params: Record<string, string>): Promise<ListResult>;
+  /** GET /pending/listPending (미결관리) — carries the 요금제 유지일(pendingdate). */
+  listPending(params: Record<string, string>): Promise<ListResult>;
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -56,6 +64,27 @@ function baseParams(
   };
 }
 
+/** Query params for /pending/listPending filtered to 요금제유지 (gubun=2). */
+function pendingParams(start: number, scale: number): Record<string, string> {
+  return {
+    start: String(start),
+    sort: "pendingdate",
+    by: "desc",
+    subject: "",
+    sdate: "",
+    edate: "",
+    gubun: "2", // 요금제유지
+    cond: "",
+    cate: "",
+    agency: "",
+    member: "",
+    condmember: "",
+    s: "phone",
+    q: "",
+    scale: String(scale),
+  };
+}
+
 /** Stable identity for a row (Poncle's line idx if present, else phone+date). */
 export function rowKey(row: PoncleRow): string {
   const idx = String(row["idx"] ?? "").trim();
@@ -69,18 +98,60 @@ export class PoncleClient {
     private config: AppConfig,
   ) {}
 
-  private async get(params: Record<string, string>): Promise<{ total: number; list: PoncleRow[] }> {
-    // Retry transport errors a few times with backoff; a genuine session-expired
-    // (netError falsy) fails fast so the caller shows the re-login banner.
+  /** Retry transport errors a few times with backoff; a genuine session-expired
+   *  (netError falsy) fails fast so the caller shows the re-login banner. */
+  private async getWith(
+    call: (p: Record<string, string>) => Promise<{ ok: boolean; total: number; list: PoncleRow[]; netError?: boolean }>,
+    params: Record<string, string>,
+  ): Promise<{ total: number; list: PoncleRow[] }> {
     for (let attempt = 0; ; attempt++) {
-      const res = await this.gw.listOpen(params);
+      const res = await call(params);
       if (res.ok) return { total: res.total, list: res.list };
       if (!res.netError) {
-        throw new SessionExpired("listOpen did not return data (session likely expired)");
+        throw new SessionExpired("list endpoint did not return data (session likely expired)");
       }
       if (attempt >= 2) throw new NetworkError("네트워크 오류로 스캔에 실패했습니다");
       await sleep(400 * (attempt + 1));
     }
+  }
+
+  private get(params: Record<string, string>): Promise<{ total: number; list: PoncleRow[] }> {
+    return this.getWith((p) => this.gw.listOpen(p), params);
+  }
+  private getPending(params: Record<string, string>): Promise<{ total: number; list: PoncleRow[] }> {
+    return this.getWith((p) => this.gw.listPending(p), params);
+  }
+
+  /** All 요금제유지 미결 rows (gubun=2), paged. Small set; carries the 유지일. */
+  async fetchPending(): Promise<PoncleRow[]> {
+    const scale = 1000;
+    const collected: PoncleRow[] = [];
+    let start = 0;
+    const maxPages = 50; // safety cap
+    for (let i = 0; i < maxPages; i++) {
+      const res = await this.getPending(pendingParams(start, scale));
+      for (const r of res.list) collected.push(r);
+      start += scale;
+      if (res.list.length < scale || start >= res.total) break;
+    }
+    return collected;
+  }
+
+  /** Look up the open row for a phone (to join type/telecom onto a 유지일 item).
+   *  Returns the latest-opendate match, or null when the customer has no open row. */
+  async fetchOpenByPhone(phone: string): Promise<PoncleRow | null> {
+    const digits = phone.replace(/[^0-9]/g, "");
+    if (!digits) return null;
+    const params = baseParams(0, 5);
+    params.q = phone; // s=customer-openphone
+    const res = await this.get(params);
+    const matches = res.list.filter(
+      (r) => String(r["openphone"] ?? "").replace(/[^0-9]/g, "") === digits,
+    );
+    const pool = matches.length ? matches : res.list;
+    // Latest opendate first ('yy-mm-dd' sorts lexically within the 2000s).
+    pool.sort((a, b) => String(b["opendate"] ?? "").localeCompare(String(a["opendate"] ?? "")));
+    return pool[0] ?? null;
   }
 
   /** Fetch every row whose opendate falls in [sdate, edate] via the server filter. */

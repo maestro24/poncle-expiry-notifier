@@ -20,6 +20,7 @@ describe("fetchByDateRange paging + dedup", () => {
     const calls: Array<Record<string, string>> = [];
     const gw = {
       check: async () => true,
+      listPending: async () => ({ ok: true, total: 0, list: [] as PoncleRow[] }),
       listOpen: async (p: Record<string, string>) => {
         calls.push(p);
         const start = Number(p.start);
@@ -38,6 +39,7 @@ describe("fetchByDateRange paging + dedup", () => {
     let fullScanUsed = false;
     const gw = {
       check: async () => true,
+      listPending: async () => ({ ok: true, total: 0, list: [] as PoncleRow[] }),
       listOpen: async (p: Record<string, string>) => {
         if (p.sdate !== "") return { ok: true, total: 0, list: [] as PoncleRow[] };
         fullScanUsed = true;
@@ -55,6 +57,7 @@ describe("filter-ineffective fallback", () => {
     let recentUsed = false;
     const gw = {
       check: async () => true,
+      listPending: async () => ({ ok: true, total: 0, list: [] as PoncleRow[] }),
       listOpen: async (p: Record<string, string>) => {
         if (p.sdate !== "") return { ok: true, total: 999999, list: [row("1", "a", "24-06-15")] };
         recentUsed = true;
@@ -71,6 +74,7 @@ describe("session expiry", () => {
   it("ok:false throws SessionExpired", async () => {
     const gw = {
       check: async () => false,
+      listPending: async () => ({ ok: false, total: 0, list: [] as PoncleRow[] }),
       listOpen: async () => ({ ok: false, total: 0, list: [] as PoncleRow[] }),
     };
     await expect(new PoncleClient(gw, cfg()).fetchCandidates(BOUNDS)).rejects.toBeInstanceOf(SessionExpired);
@@ -82,6 +86,7 @@ describe("full-scan floor", () => {
     let pages = 0;
     const gw = {
       check: async () => true,
+      listPending: async () => ({ ok: true, total: 0, list: [] as PoncleRow[] }),
       listOpen: async (p: Record<string, string>) => {
         pages++;
         const start = Number(p.start);

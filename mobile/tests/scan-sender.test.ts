@@ -31,10 +31,11 @@ const dueRow: PoncleRow = {
 // Opened 2024-07-01 -> expiry 2026-07-01, not due today.
 const notDueRow: PoncleRow = { ...dueRow, openphone: "010-3333-4444", opendate: "24-07-01" };
 
-function gatewayReturning(rows: PoncleRow[]) {
+function gatewayReturning(rows: PoncleRow[], pending: PoncleRow[] = []) {
   return {
     check: async () => true,
     listOpen: async () => ({ ok: true, total: rows.length, list: rows }),
+    listPending: async () => ({ ok: true, total: pending.length, list: pending }),
   };
 }
 
@@ -83,13 +84,21 @@ describe("History", () => {
 
 describe("runScan", () => {
   it("session expired when listOpen returns ok:false (login page)", async () => {
-    const gw = { check: async () => true, listOpen: async () => ({ ok: false, total: 0, list: [] as PoncleRow[] }) };
+    const gw = {
+      check: async () => true,
+      listPending: async () => ({ ok: true, total: 0, list: [] as PoncleRow[] }),
+      listOpen: async () => ({ ok: false, total: 0, list: [] as PoncleRow[] }),
+    };
     const res = await runScan(gw, cfg(), new History(memKV()), TODAY);
     expect(res.status).toBe("session_expired");
   });
 
   it("network error (retryable) reports error state, not session_expired", async () => {
-    const gw = { check: async () => true, listOpen: async () => ({ ok: false, netError: true, total: 0, list: [] as PoncleRow[] }) };
+    const gw = {
+      check: async () => true,
+      listPending: async () => ({ ok: true, total: 0, list: [] as PoncleRow[] }),
+      listOpen: async () => ({ ok: false, netError: true, total: 0, list: [] as PoncleRow[] }),
+    };
     const res = await runScan(gw, cfg(), new History(memKV()), TODAY);
     expect(res.status).toBe("error");
   });
@@ -117,6 +126,32 @@ describe("runScan", () => {
     expect(res.results[0].already_sent).toBe(true);
     expect(res.sent).toBe(1);
     expect(res.pending).toBe(0);
+  });
+
+  it("hybrid: 유지일 overrides term + blacklists the phone; term covers the rest", async () => {
+    const openRows: PoncleRow[] = [
+      // A: term-expiry == today, BUT has a future 유지일 -> suppressed, not due today
+      { openphone: "010-1111-2222", customer: "A", opendate: "24-07-03", openhowx: "기변", telecomx: "SK텔레콤", agencytitle: "CD대리점", model: "m" },
+      // B: term-expiry == today, no 유지일 -> term item
+      { openphone: "010-2222-3333", customer: "B", opendate: "24-07-03", openhowx: "기변", telecomx: "KT", agencytitle: "CD대리점", model: "m" },
+      // C: term-expiry 2026-07-01 (not today), but 유지일 == today -> keepdate item
+      { openphone: "010-3333-4444", customer: "C", opendate: "26-01-01", openhowx: "유심신규", telecomx: "KT", agencytitle: "쇼플러스", model: "m" },
+    ];
+    const pending: PoncleRow[] = [
+      { gubunx: "요금제유지", condx: "접수", pendingdate: "2026-07-10", openphone: "010-1111-2222", name: "A" },
+      { gubunx: "요금제유지", condx: "접수", pendingdate: "2026-07-03", openphone: "010-3333-4444", name: "C" },
+    ];
+    const res = await runScan(gatewayReturning(openRows, pending), cfg({ use_server_date_filter: false, notify_offsets_days: [0] }), new History(memKV()), TODAY);
+    expect(res.status).toBe("ok");
+    const byPhone = Object.fromEntries(res.results.map((r) => [r.phone, r]));
+    expect(byPhone["010-1111-2222"]).toBeUndefined(); // 유지일 있음(미래) -> term 제외, 범위 밖 -> 안 뜸
+    expect(byPhone["010-2222-3333"]?.source).toBe("term");
+    expect(byPhone["010-2222-3333"]?.expiry_date).toBe("2026-07-03");
+    expect(byPhone["010-3333-4444"]?.source).toBe("keepdate");
+    expect(byPhone["010-3333-4444"]?.expiry_date).toBe("2026-07-03");
+    expect(byPhone["010-3333-4444"]?.openhow).toBe("유심신규"); // joined from open
+    expect(byPhone["010-3333-4444"]?.telecom).toBe("KT");
+    expect(res.targets).toBe(2);
   });
 });
 

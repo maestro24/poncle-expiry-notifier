@@ -77,4 +77,6 @@ export interface DueItem {
   already_sent: boolean;
   /** Injected test row (010-1234-5678): exempt from dedup, never recorded. */
   test?: boolean;
+  /** Which scan pass produced this item: 요금제 유지일(keepdate) vs 약정 계산(term). */
+  source?: "keepdate" | "term";
 }
