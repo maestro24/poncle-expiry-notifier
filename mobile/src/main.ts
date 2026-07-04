@@ -157,19 +157,21 @@ function dueCard(item: DueItem): HTMLElement {
   card.className = "listcard" + (item.already_sent ? " sent" : "");
   const dn = item.milestone_offset === 0 ? "오늘 만료" : `D-${item.milestone_offset}`;
   card.innerHTML = `
-    <div class="lc-top">
-      <span class="lc-name">${esc(item.customer) || "-"}</span>
-      <span class="lc-phone">${esc(item.phone)}</span>
-      <span class="lc-tag tag-open">${esc(item.openhow) || "-"}</span>
+    <div class="lc-tap">
+      <div class="lc-top">
+        <span class="lc-name">${esc(item.customer) || "-"}</span>
+        <span class="lc-phone">${esc(item.phone)}</span>
+        <span class="lc-tag tag-open">${esc(item.openhow) || "-"}</span>
+      </div>
+      <div class="lc-meta">개통 ${esc(item.opendate)} · 만료 ${esc(item.expiry_date)} · <b>${dn}</b><br>
+        ${esc(item.agency)} · ${esc(item.telecom)} · ${esc(item.model)}</div>
     </div>
-    <div class="lc-meta">개통 ${esc(item.opendate)} · 만료 ${esc(item.expiry_date)} · <b>${dn}</b><br>
-      ${esc(item.agency)} · ${esc(item.telecom)} · ${esc(item.model)}</div>
-    <span class="lc-whytoggle">왜 떴나요?</span>
     <div class="lc-why hidden"></div>
     <div class="lc-act"></div>`;
-  const whyToggle = card.querySelector(".lc-whytoggle") as HTMLElement;
+  // Tap the card body (name/info) to reveal the "why" detail; no visible clutter.
+  const tap = card.querySelector(".lc-tap") as HTMLElement;
   const whyBox = card.querySelector(".lc-why") as HTMLElement;
-  whyToggle.onclick = () => {
+  tap.onclick = () => {
     const hidden = whyBox.classList.toggle("hidden");
     if (!hidden) whyBox.textContent = whyText(item);
   };
