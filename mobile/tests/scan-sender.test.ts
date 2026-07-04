@@ -60,6 +60,25 @@ describe("History", () => {
     expect((await h.search("", "2026-07-02")).length).toBe(1);
     expect((await h.search()).length).toBe(2);
   });
+
+  const base = { customer: "", opendate: "", milestone_offset: 0, telecom: "", agency: "", plan: "", model: "", openhow: "", staff: "" };
+  it("unvisited: past-expiry alerted customers, newest expiry first; skip/future excluded", async () => {
+    const h = new History(memKV());
+    await h.recordSent({ ...base, phone: "010-a", expiry_date: "2026-06-10" }, "sms", "2026-06-03T09:00:00");
+    await h.recordSent({ ...base, phone: "010-b", expiry_date: "2026-06-20" }, "record-only", "2026-06-13T09:00:00");
+    await h.recordSent({ ...base, phone: "010-c", expiry_date: "2026-06-15" }, "skipped", "2026-06-08T09:00:00"); // excluded (skip)
+    await h.recordSent({ ...base, phone: "010-d", expiry_date: "2026-07-30" }, "sms", "2026-07-01T09:00:00"); // excluded (future)
+    const rows = await h.unvisited("2026-07-04");
+    expect(rows.map((r) => r.phone)).toEqual(["010-b", "010-a"]);
+  });
+  it("setRecontacted flips the follow-up flag", async () => {
+    const h = new History(memKV());
+    await h.recordSent({ ...base, phone: "010-x", expiry_date: "2026-06-01" }, "sms", "2026-05-25T09:00:00");
+    await h.setRecontacted("010-x", "2026-06-01", true);
+    expect((await h.unvisited("2026-07-04"))[0].recontacted).toBe(true);
+    await h.setRecontacted("010-x", "2026-06-01", false);
+    expect((await h.unvisited("2026-07-04"))[0].recontacted).toBe(false);
+  });
 });
 
 describe("runScan", () => {

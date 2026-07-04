@@ -25,6 +25,8 @@ export interface SentRecord {
   channel: string; // "sms" | "record-only" | "skipped"
   sent_at: string; // ISO local datetime
   body?: string; // the actual message text sent (empty for skips)
+  /** Follow-up flag for the 미방문 고객 list: staff re-contacted this customer. */
+  recontacted?: boolean;
 }
 
 /** Minimal persistent key/value backend (Preferences in the app). */
@@ -119,6 +121,39 @@ export class History {
     const task = this.lock.then(async () => {
       const rows = (await this.all()).filter((r) => dedupKey(r.phone, r.expiry_date) !== key);
       await this.writeAll(rows);
+    });
+    this.lock = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    return task;
+  }
+
+  /**
+   * 미방문 고객: customers who were actually alerted (channel != skipped) and
+   * whose contract expiry has already passed (expiry_date < todayIso) but whose
+   * store visit isn't confirmed yet. Newest expiry first (smallest D+ on top).
+   */
+  async unvisited(todayIso: string): Promise<SentRecord[]> {
+    const rows = await this.all();
+    return rows
+      .filter((r) => r.channel !== "skipped" && r.expiry_date && r.expiry_date < todayIso)
+      .sort((a, b) => (a.expiry_date < b.expiry_date ? 1 : a.expiry_date > b.expiry_date ? -1 : 0));
+  }
+
+  /** Mark the follow-up state (재연락 표시 / 연락완료) for a customer. Serialized. */
+  async setRecontacted(phone: string, expiry: string, val: boolean): Promise<void> {
+    const key = dedupKey(phone, expiry);
+    const task = this.lock.then(async () => {
+      const rows = await this.all();
+      let changed = false;
+      for (const r of rows) {
+        if (dedupKey(r.phone, r.expiry_date) === key) {
+          r.recontacted = val;
+          changed = true;
+        }
+      }
+      if (changed) await this.writeAll(rows);
     });
     this.lock = task.then(
       () => undefined,

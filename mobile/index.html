@@ -80,17 +80,30 @@
       <span class="brand">발송 이력 조회</span>
     </div>
     <div class="scroll">
-      <div class="search">
-        <span class="searchicon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M21 21L16.5 16.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
-        <input id="h-query" placeholder="고객명 또는 전화번호 검색" />
+      <div class="histtabs" id="hist-tabs">
+        <button class="histtab on" data-htab="sent">발송 이력</button>
+        <button class="histtab" data-htab="unvisited">미방문 고객 <span class="htab-badge hidden" id="hist-unvisited-count">0</span></button>
       </div>
-      <div class="datepills">
-        <div class="datepill"><span>시작</span><input type="date" id="h-start" /></div>
-        <div class="datepill"><span>종료</span><input type="date" id="h-end" /></div>
+
+      <div id="hist-sent">
+        <div class="search">
+          <span class="searchicon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M21 21L16.5 16.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+          <input id="h-query" placeholder="고객명 또는 전화번호 검색" />
+        </div>
+        <div class="datepills">
+          <div class="datepill"><span>시작</span><input type="date" id="h-start" /></div>
+          <div class="datepill"><span>종료</span><input type="date" id="h-end" /></div>
+        </div>
+        <div class="listnote" id="h-count" style="margin:8px 2px 0"></div>
+        <div id="h-list" class="list" style="margin-top:8px"></div>
+        <div class="empty hidden" id="h-empty">검색 결과가 없습니다</div>
       </div>
-      <div class="listnote" id="h-count" style="margin:8px 2px 0"></div>
-      <div id="h-list" class="list" style="margin-top:8px"></div>
-      <div class="empty hidden" id="h-empty">검색 결과가 없습니다</div>
+
+      <div id="hist-unvisited" class="hidden">
+        <div class="hist-sub">만료 안내는 발송했지만 아직 매장 방문(재계약·기변)이 확인되지 않은 고객입니다.</div>
+        <div id="u-list" class="list"></div>
+        <div class="empty hidden" id="u-empty">미방문 고객이 없습니다</div>
+      </div>
     </div>
   </section>
 

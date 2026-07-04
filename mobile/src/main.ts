@@ -7,9 +7,9 @@ import { Share } from "@capacitor/share";
 import { DEFAULTS, loadConfig, saveConfig } from "./domain/config";
 import { isStandardOpenType, normalizeAgency, resolveTermMonths } from "./domain/expiry";
 import { buildBackup, historyToCsv, parseBackup } from "./domain/export";
-import { History, preferencesKV } from "./domain/history";
+import { History, preferencesKV, type SentRecord } from "./domain/history";
 import { runScan, type ScanState } from "./domain/scan";
-import { dueItemToEntry, renderTemplate, sendAlert } from "./domain/sender";
+import { renderTemplate, sendAlert } from "./domain/sender";
 import { conditionSummary, matchingTemplates } from "./domain/template-match";
 import { checkForUpdate } from "./domain/updater";
 import { STATUSES, TELECOMS, type AppConfig, type DueItem, type MessageTemplate, type StatusCode, type TelecomCode } from "./domain/types";
@@ -36,6 +36,7 @@ let RESULTS: DueItem[] = [];
 let LAST_SCAN = "";
 let DUE_QUERY = "";
 let DUE_FILTER: "all" | "unsent" = "all";
+let HIST_TAB: "sent" | "unvisited" = "sent";
 
 const AGENCIES = [
   "CD대리점", "DMB 엘지", "M&S분당도매센터", "MCC - 스테이지파이브SK", "MCC- SK텔링크",
@@ -169,8 +170,9 @@ function dueCard(item: DueItem): HTMLElement {
         <span class="lc-name">${esc(item.customer) || "-"}</span>
         <span class="lc-phone">${esc(item.phone)}</span>
         <span class="lc-tag tag-open">${esc(item.openhow) || "-"}</span>
+        <span class="lc-dday">${dn}</span>
       </div>
-      <div class="lc-meta">개통 ${esc(item.opendate)} · 만료 ${esc(item.expiry_date)} · <b>${dn}</b><br>
+      <div class="lc-meta">개통 ${esc(item.opendate)} · 만료 ${esc(item.expiry_date)}<br>
         ${esc(item.agency)} · ${esc(item.telecom)} · ${esc(item.model)}</div>
     </div>
     <div class="lc-why hidden"></div>
@@ -212,13 +214,13 @@ function actionEl(item: DueItem): HTMLElement {
   send.className = "btn-send";
   send.textContent = "알림 보내기";
   send.onclick = () => void onSend(item, send);
-  const skip = document.createElement("button");
-  skip.className = "btn-skip";
-  skip.textContent = "제외";
-  skip.title = "이미 다른 방법으로 안내함";
-  skip.onclick = () => void onSkip(item);
+  const call = document.createElement("button");
+  call.className = "btn-call";
+  call.textContent = "통화";
+  call.title = "이 번호로 전화 걸기";
+  call.onclick = () => void onCall(item);
   row.appendChild(send);
-  row.appendChild(skip);
+  row.appendChild(call);
   return row;
 }
 
@@ -280,18 +282,15 @@ function openNoTemplate(): void {
   $("#notpl-modal").classList.remove("hidden");
 }
 
-async function onSkip(item: DueItem): Promise<void> {
-  await history.recordSent(dueItemToEntry(item, ""), "skipped", nowIso());
-  markHandled(item);
-  toast(`${item.customer || item.phone} 제외됨`, {
-    undo: () => {
-      void (async () => {
-        await history.remove(item.phone, item.expiry_date);
-        item.already_sent = false;
-        renderDueList();
-      })();
-    },
-  });
+/** Open the phone dialer for this customer's number (ACTION_VIEW tel:). */
+async function onCall(item: DueItem): Promise<void> {
+  const digits = String(item.phone || "").replace(/[^0-9+]/g, "");
+  if (!digits) { toast("전화번호가 없습니다", { err: true }); return; }
+  try {
+    await openExternalUrl(`tel:${digits}`);
+  } catch {
+    toast("전화 앱을 열 수 없습니다", { err: true });
+  }
 }
 
 /* ---------- confirm send modal (real send) ---------- */
@@ -384,7 +383,35 @@ async function doLogin(): Promise<void> {
 }
 
 /* ---------- history ---------- */
+function todayIsoLocal(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+/** Whole-day difference todayIso - expiryIso (UTC math, tz-safe). */
+function daysSince(expiryIso: string, todayIso: string): number {
+  const ms = (s: string) => {
+    const [y, m, d] = s.split("-").map(Number);
+    return Date.UTC(y, (m || 1) - 1, d || 1);
+  };
+  return Math.round((ms(todayIso) - ms(expiryIso)) / 86400000);
+}
+
+/** Entry point for the 이력 screen: refresh the tab badge and render the active tab. */
 async function loadHistory(): Promise<void> {
+  const unv = await history.unvisited(todayIsoLocal());
+  const need = unv.filter((r) => !r.recontacted).length;
+  const badge = $("#hist-unvisited-count");
+  badge.textContent = String(need);
+  badge.classList.toggle("hidden", need === 0);
+  $("#hist-sent").classList.toggle("hidden", HIST_TAB !== "sent");
+  $("#hist-unvisited").classList.toggle("hidden", HIST_TAB !== "unvisited");
+  $$("#hist-tabs .histtab").forEach((b) => b.classList.toggle("on", b.dataset.htab === HIST_TAB));
+  if (HIST_TAB === "sent") await renderSentHistory();
+  else renderUnvisited(unv);
+}
+
+async function renderSentHistory(): Promise<void> {
   const rows = await history.search(
     $<HTMLInputElement>("#h-query").value.trim(),
     $<HTMLInputElement>("#h-start").value,
@@ -395,7 +422,7 @@ async function loadHistory(): Promise<void> {
   const list = $("#h-list");
   list.innerHTML = "";
   const tag: Record<string, [string, string]> = {
-    sms: ["tag-sent", "발송"], "record-only": ["tag-rec", "기록"], skipped: ["tag-rec", "제외"],
+    sms: ["tag-sent", "발송완료"], "record-only": ["tag-rec", "기록"], skipped: ["tag-rec", "제외"],
   };
   for (const r of rows) {
     const el = document.createElement("div");
@@ -410,6 +437,53 @@ async function loadHistory(): Promise<void> {
       ${r.body ? `<div class="lc-why">${esc(r.body)}</div>` : ""}`;
     list.appendChild(el);
   }
+}
+
+function renderUnvisited(rows: SentRecord[]): void {
+  const list = $("#u-list");
+  $("#u-empty").classList.toggle("hidden", rows.length > 0);
+  list.innerHTML = "";
+  const today = todayIsoLocal();
+  for (const r of rows) {
+    const dplus = daysSince(r.expiry_date, today);
+    const el = document.createElement("div");
+    el.className = "listcard";
+    el.innerHTML = `
+      <div class="lc-top">
+        <span class="lc-name">${esc(r.customer) || "-"}</span>
+        <span class="lc-dday plus">D+${dplus}</span>
+      </div>
+      <div class="lc-phone u-phone">${esc(r.phone)}</div>
+      <div class="lc-meta">만료 ${esc(r.expiry_date)} · 안내발송 ${esc(r.sent_at.slice(0, 10))}</div>
+      <div class="u-act"></div>`;
+    const act = el.querySelector(".u-act") as HTMLElement;
+    if (r.recontacted) {
+      const done = document.createElement("span");
+      done.className = "done-badge";
+      done.textContent = "연락완료";
+      act.appendChild(done);
+    } else {
+      const btn = document.createElement("button");
+      btn.className = "btn-recontact";
+      btn.textContent = "재연락 표시";
+      btn.onclick = () => void markRecontacted(r);
+      act.appendChild(btn);
+    }
+    list.appendChild(el);
+  }
+}
+
+async function markRecontacted(r: SentRecord): Promise<void> {
+  await history.setRecontacted(r.phone, r.expiry_date, true);
+  await loadHistory();
+  toast("연락완료로 표시했습니다", {
+    undo: () => {
+      void (async () => {
+        await history.setRecontacted(r.phone, r.expiry_date, false);
+        await loadHistory();
+      })();
+    },
+  });
 }
 
 /* ---------- settings ---------- */
@@ -759,7 +833,11 @@ function bind(): void {
   // Terms sub-screen: auto-save any term field on change (blur).
   $("#view-terms").addEventListener("change", () => void saveTermsNow());
 
-  // History filters
+  // History tabs (발송 이력 / 미방문 고객)
+  $$("#hist-tabs .histtab").forEach((b) => {
+    b.onclick = () => { HIST_TAB = (b.dataset.htab as "sent" | "unvisited") ?? "sent"; void loadHistory(); };
+  });
+  // History filters (발송 이력 tab)
   $("#h-query").addEventListener("input", () => void loadHistory());
   $("#h-start").addEventListener("change", () => void loadHistory());
   $("#h-end").addEventListener("change", () => void loadHistory());
