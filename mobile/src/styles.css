@@ -192,6 +192,32 @@ body {
 .modal-actions { display: flex; gap: 8px; margin-top: 16px; }
 .modal-actions .btn-soft, .modal-actions .btn-dark { flex: 1; padding: 11px 0; border-radius: 10px; }
 
+/* ---- toast ---- */
+.toast { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 74px);
+  transform: translateX(-50%); max-width: 90%; background: #1f2124; color: #fff; font-size: 13px;
+  font-weight: 600; padding: 11px 16px; border-radius: 12px; box-shadow: 0 6px 20px rgba(0,0,0,.3);
+  z-index: 60; display: flex; align-items: center; gap: 12px; }
+.toast.err { background: #b3261e; }
+.toast .toast-undo { color: #ffd; text-decoration: underline; font-weight: 700; white-space: nowrap; }
+
+/* ---- home due filter ---- */
+.due-filter { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+.due-filter .search input { background: var(--card); border: 1px solid var(--line); }
+
+/* ---- due card actions + why detail ---- */
+.lc-actions { display: flex; gap: 8px; margin-top: 10px; }
+.lc-actions .btn-send { flex: 1; }
+.btn-skip { flex: none; border: 1px solid var(--line); background: var(--card); color: var(--muted);
+  border-radius: 10px; padding: 11px 14px; font-size: 13px; font-weight: 700; cursor: pointer; font-family: inherit; }
+.lc-why { margin-top: 8px; font-size: 11.5px; color: var(--ink3); background: var(--bg);
+  border-radius: 10px; padding: 8px 10px; line-height: 1.6; }
+.lc-whytoggle { font-size: 11px; color: var(--blue); cursor: pointer; margin-top: 6px; display: inline-block; font-weight: 700; }
+
+/* ---- onboarding ---- */
+.onb-step { font-size: 12px; color: var(--muted); font-weight: 700; }
+.onb-body { font-size: 13px; color: var(--ink3); margin-top: 8px; line-height: 1.6; }
+.onb-body .btn-dark, .onb-body .btn-soft { margin-top: 10px; }
+
 /* ---- bottom nav ---- */
 .bottomnav { display: flex; background: #fff; border-top: 1px solid var(--line);
   padding: 6px 8px calc(env(safe-area-inset-bottom) + 8px); flex: none; }

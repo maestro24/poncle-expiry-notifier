@@ -1,8 +1,7 @@
 /**
  * Send (record) an outbound customer message for one due row, from "알림 보내기".
- * Port of backend/sender.py, with delivery via the native SMS plugin instead of
- * the PC phone-link. Dedup + record are the same: a successful send is recorded
- * into history so the customer is never messaged twice for the same milestone.
+ * Dedup + record: a successful send is recorded into history so the customer is
+ * never messaged twice for the same contract (dedup on phone+expiry).
  */
 import { formatWhen } from "./expiry";
 import type { History, SentRecord } from "./history";
@@ -24,38 +23,14 @@ export interface SendOutcome {
   error?: string;
 }
 
-export async function sendAlert(item: DueItem, cfg: AppConfig, deps: SendDeps): Promise<SendOutcome> {
-  const phone = (item.phone || "").trim();
-  const expiry = (item.expiry_date || "").trim();
-  const offset = Number(item.milestone_offset || 0);
-  if (!phone || !expiry) return { status: "error", error: "invalid item" };
-
-  if (await deps.history.alreadySent(phone, expiry)) {
-    return { status: "already" };
-  }
-
-  let channel: string;
-  if (cfg.deliver_alerts) {
-    const when = formatWhen(offset, parseIsoDate(expiry));
-    const text = renderMessage(templateForRow(cfg, item as unknown as Record<string, unknown>), item, when);
-    try {
-      await deps.sendSms(phone, text);
-    } catch (e) {
-      // Native SmsPlugin already rejects with a user-facing Korean reason.
-      const msg = e instanceof Error ? e.message : String(e);
-      return { status: "error", error: msg || "문자 전송 실패" };
-    }
-    channel = "sms";
-  } else {
-    channel = "record-only";
-  }
-
-  const newly = await deps.history.recordSent(entryOf(item), channel, deps.nowIso());
-  if (!newly) return { status: "already" };
-  return { status: "sent", channel };
+/** The exact message that would be sent for this item (for preview/edit). */
+export function renderAlertText(item: DueItem, cfg: AppConfig): string {
+  const when = formatWhen(Number(item.milestone_offset || 0), parseIsoDate((item.expiry_date || "").trim()));
+  return renderMessage(templateForRow(cfg, item as unknown as Record<string, unknown>), item, when);
 }
 
-function entryOf(item: DueItem): Omit<SentRecord, "channel" | "sent_at"> {
+/** A history record shape from a due item (+ the actual message body). */
+export function dueItemToEntry(item: DueItem, body = ""): Omit<SentRecord, "channel" | "sent_at"> {
   return {
     phone: (item.phone || "").trim(),
     customer: item.customer || "",
@@ -68,7 +43,47 @@ function entryOf(item: DueItem): Omit<SentRecord, "channel" | "sent_at"> {
     model: item.model || "",
     openhow: item.openhow || "",
     staff: item.staff || "",
+    body,
   };
+}
+
+/**
+ * Send one alert. When `overrideText` is given (edited in the confirmation sheet)
+ * it is sent verbatim; otherwise the template is rendered. The actual body is
+ * stored in history so staff can later see exactly what each customer received.
+ */
+export async function sendAlert(
+  item: DueItem,
+  cfg: AppConfig,
+  deps: SendDeps,
+  overrideText?: string,
+): Promise<SendOutcome> {
+  const phone = (item.phone || "").trim();
+  const expiry = (item.expiry_date || "").trim();
+  if (!phone || !expiry) return { status: "error", error: "invalid item" };
+
+  if (await deps.history.alreadySent(phone, expiry)) {
+    return { status: "already" };
+  }
+
+  const body = overrideText ?? renderAlertText(item, cfg);
+  let channel: string;
+  if (cfg.deliver_alerts) {
+    try {
+      await deps.sendSms(phone, body);
+    } catch (e) {
+      // Native SmsPlugin already rejects with a user-facing Korean reason.
+      const msg = e instanceof Error ? e.message : String(e);
+      return { status: "error", error: msg || "문자 전송 실패" };
+    }
+    channel = "sms";
+  } else {
+    channel = "record-only";
+  }
+
+  const newly = await deps.history.recordSent(dueItemToEntry(item, body), channel, deps.nowIso());
+  if (!newly) return { status: "already" };
+  return { status: "sent", channel };
 }
 
 function parseIsoDate(iso: string) {

@@ -22,8 +22,9 @@ export interface SentRecord {
   model: string;
   openhow: string;
   staff: string;
-  channel: string;
+  channel: string; // "sms" | "record-only" | "skipped"
   sent_at: string; // ISO local datetime
+  body?: string; // the actual message text sent (empty for skips)
 }
 
 /** Minimal persistent key/value backend (Preferences in the app). */
@@ -89,6 +90,35 @@ export class History {
       rows.push({ ...entry, channel, sent_at: nowIso });
       await this.writeAll(rows);
       return true;
+    });
+    this.lock = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    return task;
+  }
+
+  /** All stored records (for backup/export). */
+  async exportAll(): Promise<SentRecord[]> {
+    return this.all();
+  }
+
+  /** Replace the entire store (for restore from a backup). Serialized. */
+  async replaceAll(rows: SentRecord[]): Promise<void> {
+    const task = this.lock.then(() => this.writeAll(Array.isArray(rows) ? rows : []));
+    this.lock = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    return task;
+  }
+
+  /** Remove the record(s) for a dedup key (used to undo a skip). Serialized. */
+  async remove(phone: string, expiry: string): Promise<void> {
+    const key = dedupKey(phone, expiry);
+    const task = this.lock.then(async () => {
+      const rows = (await this.all()).filter((r) => dedupKey(r.phone, r.expiry_date) !== key);
+      await this.writeAll(rows);
     });
     this.lock = task.then(
       () => undefined,

@@ -55,6 +55,17 @@
 
       <button class="btn-scan" id="btn-scan">지금 다시 스캔</button>
 
+      <div class="due-filter" id="due-filter">
+        <div class="search">
+          <span class="searchicon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M21 21L16.5 16.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+          <input id="due-query" placeholder="고객명 또는 번호 검색" />
+        </div>
+        <div class="chips" id="due-filter-chips">
+          <button class="chip on" data-duefilter="all">전체</button>
+          <button class="chip" data-duefilter="unsent">미발송만</button>
+        </div>
+      </div>
+
       <div class="listhead"><span>약정 만료 대상</span><span class="listnote" id="list-note"></span></div>
       <div id="due-list" class="list"></div>
       <div class="empty hidden" id="due-empty">스캔 결과가 없습니다. “지금 다시 스캔”을 눌러 주세요.</div>
@@ -168,6 +179,21 @@
         <div class="save-msg" id="test-sms-msg"></div>
       </div>
 
+      <div class="setcard">
+        <div class="setcard-title">데이터 백업 / 내보내기</div>
+        <div class="setcard-sub">폰 교체·재설치 시 발송 이력이 사라집니다(→ 전 고객 재발송 위험). 백업을 저장해 두고, 새 폰에서 복원하세요.</div>
+        <div class="btnrow" style="flex-wrap:wrap">
+          <button class="btn-soft" id="btn-export-csv">이력 CSV</button>
+          <button class="btn-soft" id="btn-export-backup">백업 내보내기</button>
+        </div>
+        <label style="display:block;margin-top:10px;font-size:12px;color:var(--muted)">복원: 백업 내용을 붙여넣고 복원</label>
+        <textarea id="restore-text" class="template-area" rows="2" placeholder="백업 JSON 붙여넣기" style="margin-top:6px"></textarea>
+        <div class="btnrow">
+          <button class="btn-dark" id="btn-restore">복원</button>
+          <span class="save-msg" id="backup-msg"></span>
+        </div>
+      </div>
+
       <button class="btn-scan" id="btn-save">저장</button>
       <div class="save-msg center" id="save-msg"></div>
     </div>
@@ -202,6 +228,35 @@
       </div>
     </div>
   </div>
+
+  <!-- ===== CONFIRM SEND MODAL (real send) ===== -->
+  <div id="confirm-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-title">문자 보내기</div>
+      <div class="modal-ver"><b id="confirm-name">-</b> · <span id="confirm-phone">-</span></div>
+      <textarea id="confirm-text" class="template-area" rows="5" style="margin-top:12px"></textarea>
+      <div class="modal-hint">아래 내용 그대로 실제 문자가 발송됩니다. 필요하면 수정하세요.</div>
+      <div class="modal-actions">
+        <button class="btn-soft" id="confirm-cancel">취소</button>
+        <button class="btn-dark" id="confirm-send">보내기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== ONBOARDING ===== -->
+  <div id="onboarding" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="onb-step" id="onb-step"></div>
+      <div class="modal-title" id="onb-title"></div>
+      <div class="onb-body" id="onb-body"></div>
+      <div class="modal-actions">
+        <button class="btn-soft" id="onb-skip">건너뛰기</button>
+        <button class="btn-dark" id="onb-next">다음</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
 
 </div>
 <script type="module" src="/src/main.ts"></script>

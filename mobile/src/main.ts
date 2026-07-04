@@ -1,12 +1,17 @@
 /**
- * App controller for 약정만료 알리미 (Android). Wires the DOM (design ported from
- * the Android handoff) to the domain logic (runs in-process in the WebView) and
- * the native plugins (Poncle login/HTTP, SMS). Framework-free vanilla TS.
+ * App controller for 약정만료 알리미 (Android). Wires the DOM to the domain logic
+ * (runs in-process in the WebView) and the native plugins. Framework-free vanilla TS.
  */
+import { Preferences } from "@capacitor/preferences";
+import { Share } from "@capacitor/share";
 import { DEFAULTS, loadConfig, saveConfig } from "./domain/config";
+import { isStandardOpenType, normalizeAgency, resolveTermMonths } from "./domain/expiry";
+import { buildBackup, historyToCsv, parseBackup } from "./domain/export";
 import { History, preferencesKV } from "./domain/history";
 import { runScan, type ScanState } from "./domain/scan";
-import { sendAlert } from "./domain/sender";
+import { dueItemToEntry, renderAlertText, sendAlert } from "./domain/sender";
+import { checkForUpdate } from "./domain/updater";
+import type { AppConfig, DueItem } from "./domain/types";
 import {
   clearPoncleCredentials,
   getAppVersion,
@@ -20,8 +25,6 @@ import {
   savePoncleCredentials,
   sendSms,
 } from "./native/adapters";
-import { checkForUpdate } from "./domain/updater";
-import type { AppConfig, DueItem } from "./domain/types";
 
 const $ = <T extends HTMLElement = HTMLElement>(s: string): T => document.querySelector(s) as T;
 const $$ = (s: string): HTMLElement[] => Array.from(document.querySelectorAll(s));
@@ -30,9 +33,9 @@ const history = new History(preferencesKV());
 let CFG: AppConfig = { ...DEFAULTS };
 let RESULTS: DueItem[] = [];
 let LAST_SCAN = "";
+let DUE_QUERY = "";
+let DUE_FILTER: "all" | "unsent" = "all";
 
-// 거래처 목록 (from Poncle's agency dropdown). Non-standard open types use a
-// per-agency term; pre-listed so they can be set even before a scan.
 const AGENCIES = [
   "CD대리점", "DMB 엘지", "M&S분당도매센터", "MCC - 스테이지파이브SK", "MCC- SK텔링크",
   "MCC- 엠모바일", "MCC-KT엠모바일 후불유심", "mcc-kt중고후불", "MCC-미디어로그후불",
@@ -42,10 +45,7 @@ const AGENCIES = [
   "쇼플러스", "유니컴즈(모빙) KT", "유니컴즈(모빙)LGT", "유니컴즈(모빙)SK", "유안-엔네트웍스",
   "티인포(mcc)",
 ];
-
-// 안내 시점 options (days before expiry). 0 == expiry day.
 const DDAY_OPTIONS = [30, 14, 7, 3, 1, 0];
-// Template variable chips: label -> token the render engine understands.
 const VARS: Array<[string, string]> = [
   ["고객명", "{customer}"], ["통신사", "{telecom}"], ["모델", "{model}"],
   ["만료일", "{expiry}"], ["개통일", "{opendate}"], ["시점", "{when}"],
@@ -72,6 +72,23 @@ function decodeHtml(s: string): string {
   return t.value;
 }
 
+/* ---------- toast ---------- */
+let toastTimer: ReturnType<typeof setTimeout> | null = null;
+function toast(msg: string, opts: { err?: boolean; undo?: () => void } = {}): void {
+  const el = $("#toast");
+  el.className = "toast" + (opts.err ? " err" : "");
+  el.textContent = msg;
+  if (opts.undo) {
+    const u = document.createElement("span");
+    u.className = "toast-undo";
+    u.textContent = "실행취소";
+    u.onclick = () => { el.classList.add("hidden"); opts.undo!(); };
+    el.appendChild(u);
+  }
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.add("hidden"), opts.undo ? 6000 : 2600);
+}
+
 /* ---------- navigation ---------- */
 type Screen = "home" | "history" | "settings";
 function showScreen(name: Screen): void {
@@ -85,9 +102,6 @@ function showScreen(name: Screen): void {
 
 /* ---------- state ---------- */
 function renderState(state: ScanState): void {
-  const badge = $("#status-badge");
-  const label = $("#status-label");
-  const spin = $("#status-spinner");
   const map: Record<ScanState, { cls: string; text: string; busy: boolean }> = {
     idle: { cls: "", text: "대기중", busy: false },
     scanning: { cls: "is-busy", text: "스캔중", busy: true },
@@ -95,9 +109,9 @@ function renderState(state: ScanState): void {
     error: { cls: "is-error", text: "오류", busy: false },
   };
   const m = map[state] ?? map.idle;
-  badge.className = "badge " + m.cls;
-  label.textContent = m.text;
-  spin.classList.toggle("hidden", !m.busy);
+  $("#status-badge").className = "badge " + m.cls;
+  $("#status-label").textContent = m.text;
+  $("#status-spinner").classList.toggle("hidden", !m.busy);
 }
 function showBanner(which: "session" | "error" | "none", errMsg?: string): void {
   $("#session-banner").classList.toggle("hidden", which !== "session");
@@ -112,29 +126,65 @@ function renderCards(): void {
   $("#c-pending").textContent = String(RESULTS.length - sent);
   $("#c-sent").textContent = String(sent);
 }
+function filteredResults(): DueItem[] {
+  const q = DUE_QUERY.trim().toLowerCase();
+  return RESULTS.filter((r) => {
+    if (DUE_FILTER === "unsent" && r.already_sent) return false;
+    if (q && !(String(r.customer).toLowerCase().includes(q) || String(r.phone).includes(q))) return false;
+    return true;
+  });
+}
 function renderDueList(): void {
   const list = $("#due-list");
-  $("#due-empty").classList.toggle("hidden", RESULTS.length > 0);
+  const rows = filteredResults();
   const unsent = RESULTS.filter((r) => !r.already_sent).length;
   $("#list-note").textContent = RESULTS.length ? `${RESULTS.length}명 · 미발송 ${unsent}명` : "";
+  const empty = $("#due-empty");
+  empty.classList.toggle("hidden", rows.length > 0);
+  empty.textContent = RESULTS.length === 0
+    ? "스캔 결과가 없습니다. “지금 다시 스캔”을 눌러 주세요."
+    : "검색/필터에 맞는 대상이 없습니다.";
   list.innerHTML = "";
-  for (const item of RESULTS) list.appendChild(dueCard(item));
+  for (const item of rows) list.appendChild(dueCard(item));
   renderCards();
 }
 function dueCard(item: DueItem): HTMLElement {
   const card = document.createElement("div");
   card.className = "listcard" + (item.already_sent ? " sent" : "");
+  const dn = item.milestone_offset === 0 ? "오늘 만료" : `D-${item.milestone_offset}`;
   card.innerHTML = `
     <div class="lc-top">
       <span class="lc-name">${esc(item.customer) || "-"}</span>
       <span class="lc-phone">${esc(item.phone)}</span>
       <span class="lc-tag tag-open">${esc(item.openhow) || "-"}</span>
     </div>
-    <div class="lc-meta">개통 ${esc(item.opendate)} · 만료 ${esc(item.expiry_date)}<br>
+    <div class="lc-meta">개통 ${esc(item.opendate)} · 만료 ${esc(item.expiry_date)} · <b>${dn}</b><br>
       ${esc(item.agency)} · ${esc(item.telecom)} · ${esc(item.model)}</div>
+    <span class="lc-whytoggle">왜 떴나요?</span>
+    <div class="lc-why hidden"></div>
     <div class="lc-act"></div>`;
+  const whyToggle = card.querySelector(".lc-whytoggle") as HTMLElement;
+  const whyBox = card.querySelector(".lc-why") as HTMLElement;
+  whyToggle.onclick = () => {
+    const hidden = whyBox.classList.toggle("hidden");
+    if (!hidden) whyBox.textContent = whyText(item);
+  };
   (card.querySelector(".lc-act") as HTMLElement).appendChild(actionEl(item));
   return card;
+}
+function whyText(item: DueItem): string {
+  const term = resolveTermMonths({ openhowx: item.openhow, agencytitle: item.agency }, CFG);
+  let basis: string;
+  if (isStandardOpenType(item.openhow)) {
+    basis = "표준(기변/신규)";
+  } else {
+    const overrides = CFG.agency_term_months || {};
+    const norm = normalizeAgency(item.agency);
+    const hasOverride = Object.keys(overrides).some((k) => normalizeAgency(k) === norm);
+    basis = hasOverride ? "거래처 예외" : "그 외 기본";
+  }
+  const dn = item.milestone_offset === 0 ? "오늘 만료" : `만료 ${item.milestone_offset}일 전 (D-${item.milestone_offset})`;
+  return `적용 약정 ${term}개월 · ${basis}\n개통 ${item.opendate} → 만료 ${item.expiry_date} · ${dn}`;
 }
 function actionEl(item: DueItem): HTMLElement {
   if (item.already_sent) {
@@ -143,30 +193,88 @@ function actionEl(item: DueItem): HTMLElement {
     b.textContent = CFG.deliver_alerts ? "✓ 발송됨" : "✓ 기록됨(미발송)";
     return b;
   }
-  const btn = document.createElement("button");
-  btn.className = "btn-send";
-  btn.textContent = "알림 보내기";
-  btn.onclick = () => void onSend(item, btn);
-  return btn;
+  const row = document.createElement("div");
+  row.className = "lc-actions";
+  const send = document.createElement("button");
+  send.className = "btn-send";
+  send.textContent = "알림 보내기";
+  send.onclick = () => void onSend(item, send);
+  const skip = document.createElement("button");
+  skip.className = "btn-skip";
+  skip.textContent = "제외";
+  skip.title = "이미 다른 방법으로 안내함";
+  skip.onclick = () => void onSkip(item);
+  row.appendChild(send);
+  row.appendChild(skip);
+  return row;
 }
+
+/** After a send/skip, flip the row to its 'handled' state in place. */
+function markHandled(item: DueItem): void {
+  item.already_sent = true;
+  renderDueList();
+}
+
 async function onSend(item: DueItem, btn: HTMLButtonElement): Promise<void> {
+  // Real send: confirm + preview/edit first. Record-only: no confirmation needed.
+  if (CFG.deliver_alerts) {
+    openConfirm(item);
+    return;
+  }
   btn.disabled = true;
-  btn.textContent = "전송 중…";
   const res = await sendAlert(item, CFG, { history, sendSms, nowIso });
   if (res.status === "sent" || res.status === "already") {
-    item.already_sent = true;
-    const card = btn.closest(".listcard") as HTMLElement | null;
-    if (card) {
-      card.classList.add("sent");
-      const act = card.querySelector(".lc-act") as HTMLElement;
-      act.innerHTML = "";
-      act.appendChild(actionEl(item));
-    }
-    renderCards();
+    markHandled(item);
+    toast("기록되었습니다 (실제 발송 꺼짐)");
   } else {
     btn.disabled = false;
-    btn.textContent = "알림 보내기";
-    alert(res.error || "발송 실패");
+    toast(res.error || "실패", { err: true });
+  }
+}
+
+async function onSkip(item: DueItem): Promise<void> {
+  await history.recordSent(dueItemToEntry(item, ""), "skipped", nowIso());
+  markHandled(item);
+  toast(`${item.customer || item.phone} 제외됨`, {
+    undo: () => {
+      void (async () => {
+        await history.remove(item.phone, item.expiry_date);
+        item.already_sent = false;
+        renderDueList();
+      })();
+    },
+  });
+}
+
+/* ---------- confirm send modal (real send) ---------- */
+let confirmItem: DueItem | null = null;
+function openConfirm(item: DueItem): void {
+  confirmItem = item;
+  $("#confirm-name").textContent = item.customer || "-";
+  $("#confirm-phone").textContent = item.phone;
+  $<HTMLTextAreaElement>("#confirm-text").value = renderAlertText(item, CFG);
+  $("#confirm-modal").classList.remove("hidden");
+}
+async function doConfirmSend(): Promise<void> {
+  const item = confirmItem;
+  if (!item) return;
+  const text = $<HTMLTextAreaElement>("#confirm-text").value;
+  const btn = $<HTMLButtonElement>("#confirm-send");
+  btn.disabled = true;
+  btn.textContent = "전송 중…";
+  const res = await sendAlert(item, CFG, { history, sendSms, nowIso }, text);
+  btn.disabled = false;
+  btn.textContent = "보내기";
+  $("#confirm-modal").classList.add("hidden");
+  confirmItem = null;
+  if (res.status === "sent") {
+    markHandled(item);
+    toast("문자를 보냈습니다");
+  } else if (res.status === "already") {
+    markHandled(item);
+    toast("이미 발송된 고객입니다");
+  } else {
+    toast(res.error || "발송 실패", { err: true });
   }
 }
 
@@ -189,6 +297,7 @@ async function doScan(): Promise<void> {
     if (res.status === "error") {
       showBanner("error", res.error);
       renderState("error");
+      toast(res.error || "스캔 실패", { err: true });
       return;
     }
     showBanner("none");
@@ -221,17 +330,20 @@ async function loadHistory(): Promise<void> {
   $("#h-empty").classList.toggle("hidden", rows.length > 0);
   const list = $("#h-list");
   list.innerHTML = "";
+  const tag: Record<string, [string, string]> = {
+    sms: ["tag-sent", "발송"], "record-only": ["tag-rec", "기록"], skipped: ["tag-rec", "제외"],
+  };
   for (const r of rows) {
     const el = document.createElement("div");
     el.className = "listcard";
-    const tagCls = r.channel === "sms" ? "tag-sent" : "tag-rec";
-    const tagTxt = r.channel === "sms" ? "발송" : "기록";
+    const [tagCls, tagTxt] = tag[r.channel] ?? ["tag-rec", r.channel];
     el.innerHTML = `
       <div class="lc-top"><span class="lc-name">${esc(r.customer) || "-"}</span>
         <span class="lc-phone">${esc(r.phone)}</span>
         <span class="lc-tag ${tagCls}">${tagTxt}</span></div>
-      <div class="lc-meta">개통 ${esc(r.opendate)} · 만료 ${esc(r.expiry_date)} · 발송 ${esc(r.sent_at.replace("T", " ").slice(0, 16))}<br>
-        ${esc(r.agency)} · ${esc(r.telecom)} · ${esc(r.model)}</div>`;
+      <div class="lc-meta">개통 ${esc(r.opendate)} · 만료 ${esc(r.expiry_date)} · 처리 ${esc(r.sent_at.replace("T", " ").slice(0, 16))}<br>
+        ${esc(r.agency)} · ${esc(r.telecom)} · ${esc(r.model)}</div>
+      ${r.body ? `<div class="lc-why">${esc(r.body)}</div>` : ""}`;
     list.appendChild(el);
   }
 }
@@ -270,8 +382,6 @@ function buildAgencyTerms(): void {
 function buildDDayChips(): void {
   const box = $("#dday-chips");
   box.innerHTML = "";
-  // Single look-ahead window = the largest configured offset. Single-select: the
-  // scan shows everyone expiring within this many days.
   const selected = Math.max(...(CFG.notify_offsets_days || [0]).map(Number));
   for (const v of DDAY_OPTIONS) {
     const b = document.createElement("button");
@@ -307,9 +417,6 @@ function insertToken(targetId: string, token: string): void {
   ta.focus();
   ta.setSelectionRange(pos, pos);
 }
-function setToggle(el: HTMLElement, on: boolean): void {
-  el.classList.toggle("on", on);
-}
 function populateSettings(): void {
   $<HTMLInputElement>("#s-standard-term").value = String(CFG.default_term_months ?? 24);
   $<HTMLInputElement>("#s-nonstandard-term").value = String(CFG.nonstandard_term_months ?? 6);
@@ -318,7 +425,7 @@ function populateSettings(): void {
   buildVarChips();
   $<HTMLTextAreaElement>("#s-template").value = CFG.message_template || "";
   $<HTMLTextAreaElement>("#s-template-nonstandard").value = CFG.message_template_nonstandard || "";
-  setToggle($("#s-deliver"), !!CFG.deliver_alerts);
+  $("#s-deliver").classList.toggle("on", !!CFG.deliver_alerts);
 }
 function gatherSettings(): Partial<AppConfig> {
   const offsets = $$("#dday-chips .chip")
@@ -352,14 +459,99 @@ async function refreshCredsState(): Promise<void> {
   $("#creds-msg").textContent = meta.hasCreds ? "저장됨 · 로그인 화면에서 자동 입력됩니다" : "";
 }
 
+/* ---------- export / backup ---------- */
+async function shareText(title: string, text: string): Promise<void> {
+  try {
+    await Share.share({ title, text, dialogTitle: title });
+  } catch {
+    // Web preview / no share target: copy to clipboard as a fallback.
+    try { await navigator.clipboard.writeText(text); toast("클립보드에 복사했습니다"); } catch { toast("공유를 사용할 수 없습니다", { err: true }); }
+  }
+}
+async function exportCsv(): Promise<void> {
+  const rows = await history.exportAll();
+  if (rows.length === 0) { toast("내보낼 이력이 없습니다"); return; }
+  await shareText("발송 이력 (CSV)", historyToCsv(rows));
+}
+async function exportBackup(): Promise<void> {
+  const backup = buildBackup(CFG, await history.exportAll(), nowIso());
+  await shareText("약정만료 알리미 백업", JSON.stringify(backup));
+}
+async function doRestore(): Promise<void> {
+  const text = $<HTMLTextAreaElement>("#restore-text").value.trim();
+  const msg = $("#backup-msg");
+  const backup = parseBackup(text);
+  if (!backup) { msg.textContent = "백업 형식이 아닙니다"; return; }
+  await history.replaceAll(backup.history);
+  if (backup.config) CFG = await saveConfig(backup.config);
+  $<HTMLTextAreaElement>("#restore-text").value = "";
+  msg.textContent = `복원됨 (이력 ${backup.history.length}건)`;
+  toast("복원되었습니다");
+}
+
+/* ---------- onboarding ---------- */
+const ONB_KEY = "onboarded_v1";
+interface OnbStep { title: string; body: string; action?: { label: string; run: () => Promise<void> } }
+let onbIndex = 0;
+let ONB_STEPS: OnbStep[] = [];
+function buildOnbSteps(): OnbStep[] {
+  return [
+    {
+      title: "약정만료 알리미",
+      body: "폰클에서 약정 만료가 다가온 고객을 찾아, 이 폰에서 바로 문자로 안내합니다. 문자를 보내려면 문자 권한이 필요합니다.",
+      action: { label: "문자 권한 허용", run: async () => { await requestSmsPermission(); } },
+    },
+    {
+      title: "폰클 로그인",
+      body: "폰클에 로그인하면 고객 목록을 읽어옵니다. 로그인 화면에서 보안문자(로봇 아님)만 직접 눌러 주세요. 아이디·비밀번호는 자동으로 저장돼 다음부터 자동 입력됩니다.",
+      action: { label: "폰클 로그인", run: async () => { await poncleLogin(CFG); } },
+    },
+    {
+      title: "문자 발송 테스트",
+      body: "실제로 문자가 나가는지 먼저 내 번호로 확인하는 걸 권장합니다. 설정 > ‘문자 발송 테스트’에서 내 번호로 보내 보세요.",
+    },
+    {
+      title: "발송 모드 선택",
+      body: "‘실제 발송’을 켜면 고객에게 진짜 문자가 나갑니다. 꺼두면 이력에만 기록됩니다(연습용). 지금 켤 수 있고, 나중에 설정에서 바꿀 수 있습니다.",
+      action: { label: "실제 발송 켜기", run: async () => { CFG = await saveConfig({ ...CFG, deliver_alerts: true }); } },
+    },
+  ];
+}
+function renderOnb(): void {
+  const s = ONB_STEPS[onbIndex];
+  $("#onb-step").textContent = `${onbIndex + 1} / ${ONB_STEPS.length}`;
+  $("#onb-title").textContent = s.title;
+  const body = $("#onb-body");
+  body.textContent = s.body;
+  if (s.action) {
+    const btn = document.createElement("button");
+    btn.className = "btn-dark";
+    btn.textContent = s.action.label;
+    btn.onclick = async () => { btn.disabled = true; await s.action!.run(); btn.disabled = false; btn.textContent = s.action!.label + " ✓"; };
+    body.appendChild(document.createElement("br"));
+    body.appendChild(btn);
+  }
+  $("#onb-next").textContent = onbIndex >= ONB_STEPS.length - 1 ? "시작하기" : "다음";
+}
+async function finishOnb(): Promise<void> {
+  $("#onboarding").classList.add("hidden");
+  await Preferences.set({ key: ONB_KEY, value: "1" });
+}
+async function maybeOnboard(): Promise<void> {
+  const { value } = await Preferences.get({ key: ONB_KEY }).catch(() => ({ value: null }));
+  if (value === "1") return;
+  ONB_STEPS = buildOnbSteps();
+  onbIndex = 0;
+  renderOnb();
+  $("#onboarding").classList.remove("hidden");
+}
+
 /* ---------- test target ---------- */
 async function addTestTarget(): Promise<void> {
   const now = new Date();
   const p = (n: number) => String(n).padStart(2, "0");
   const iso = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
   const yy = `${p(now.getFullYear() % 100)}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
-  // Reflect real dedup: if this (phone, expiry, offset) was already sent today,
-  // show it as 발송됨 instead of an active send button.
   const already = await history.alreadySent("010-1234-5678", iso);
   RESULTS = RESULTS.concat([{
     id: `010-1234-5678|${iso}`,
@@ -379,15 +571,34 @@ function bind(): void {
   $("#btn-retry").onclick = () => void doScan();
   $("#btn-test-target").onclick = () => void addTestTarget();
 
+  // Home due-list search + filter
+  $("#due-query").addEventListener("input", (e) => {
+    DUE_QUERY = (e.target as HTMLInputElement).value;
+    renderDueList();
+  });
+  $$("#due-filter-chips .chip").forEach((c) => {
+    c.onclick = () => {
+      $$("#due-filter-chips .chip").forEach((x) => x.classList.remove("on"));
+      c.classList.add("on");
+      DUE_FILTER = (c.dataset.duefilter as "all" | "unsent") ?? "all";
+      renderDueList();
+    };
+  });
+
+  // Confirm-send modal
+  $("#confirm-cancel").onclick = () => { $("#confirm-modal").classList.add("hidden"); confirmItem = null; };
+  $("#confirm-send").onclick = () => void doConfirmSend();
+
+  // History filters
   $("#h-query").addEventListener("input", () => void loadHistory());
   $("#h-start").addEventListener("change", () => void loadHistory());
   $("#h-end").addEventListener("change", () => void loadHistory());
 
+  // Settings
   $("#s-deliver").onclick = async () => {
     const el = $("#s-deliver");
     const nowOn = !el.classList.contains("on");
     el.classList.toggle("on", nowOn);
-    // Turning "실제 발송" on is the moment SMS permission matters -> prompt now.
     if (nowOn) await requestSmsPermission();
   };
   $("#btn-relogin").onclick = async () => {
@@ -398,8 +609,6 @@ function bind(): void {
     await poncleLogout(CFG);
     $("#session-state").textContent = "로그아웃됨";
   };
-  // Auto-save when both fields are filled and the user leaves a field (change),
-  // so pressing 저장 is optional.
   const autoSaveCreds = async (): Promise<void> => {
     const id = $<HTMLInputElement>("#s-poncle-id").value.trim();
     const pw = $<HTMLInputElement>("#s-poncle-pw").value;
@@ -430,25 +639,36 @@ function bind(): void {
     msg.textContent = "전송 중…";
     try {
       await sendSms(phone, "[약정만료 알리미] 테스트 문자입니다. 정상 수신되면 발송 설정이 완료된 것입니다.");
-      msg.textContent = "전송 요청됨 ✓ 수신 확인해 보세요";
+      msg.textContent = "전송됨 ✓ 수신 확인해 보세요";
     } catch (e) {
       msg.textContent = "실패: " + (e instanceof Error ? e.message : String(e));
     }
   };
 
+  // Backup / export
+  $("#btn-export-csv").onclick = () => void exportCsv();
+  $("#btn-export-backup").onclick = () => void exportBackup();
+  $("#btn-restore").onclick = () => void doRestore();
+
   $("#btn-save").onclick = async () => {
     CFG = await saveConfig({ ...CFG, ...gatherSettings() });
-    const msg = $("#save-msg");
-    msg.textContent = "저장되었습니다";
-    renderDueList(); // refresh sent/record badges per new deliver setting
-    setTimeout(() => { msg.textContent = ""; }, 2000);
+    renderDueList();
+    toast("저장되었습니다");
   };
+
+  // Onboarding
+  $("#onb-next").onclick = async () => {
+    if (onbIndex >= ONB_STEPS.length - 1) { await finishOnb(); return; }
+    onbIndex++;
+    renderOnb();
+  };
+  $("#onb-skip").onclick = () => void finishOnb();
 }
 
 /* ---------- update ---------- */
 async function checkUpdate(): Promise<void> {
   const current = await getAppVersion().catch(() => "");
-  if (!current || current === "0.0.0") return; // web fallback / unknown
+  if (!current || current === "0.0.0") return;
   const info = await checkForUpdate(current);
   if (!info.available || !info.url) return;
   $("#upd-current").textContent = "v" + current;
@@ -456,10 +676,7 @@ async function checkUpdate(): Promise<void> {
   $("#upd-notes").textContent = info.notes || "";
   const modal = $("#update-modal");
   $("#upd-later").onclick = () => modal.classList.add("hidden");
-  $("#upd-now").onclick = () => {
-    void openExternalUrl(info.url);
-    modal.classList.add("hidden");
-  };
+  $("#upd-now").onclick = () => { void openExternalUrl(info.url); modal.classList.add("hidden"); };
   modal.classList.remove("hidden");
 }
 
@@ -468,8 +685,7 @@ async function boot(): Promise<void> {
   bind();
   CFG = await loadConfig();
   renderState("idle");
-  // First launch: prompt for SMS permission up front (no-op if already granted).
-  void requestSmsPermission();
+  await maybeOnboard();
   const hasSession = await poncleHasSession(CFG).catch(() => false);
   showBanner(hasSession ? "none" : "session");
   if (hasSession) await doScan();
