@@ -2,12 +2,14 @@ package com.poncleexpiry.app;
 
 import android.app.Activity;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -80,6 +82,18 @@ public class PoncleLoginActivity extends Activity {
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                // Pin the top frame to Poncle. reCAPTCHA/analytics load as SUBFRAMES
+                // (isForMainFrame() == false) and are allowed; a top-frame navigation
+                // to any non-Poncle origin is blocked, so no other site ever receives
+                // the autofilled password or can drive the AndroidCreds bridge.
+                if (request.isForMainFrame() && !isPoncleHost(request.getUrl())) {
+                    return true; // cancel
+                }
+                return false;
+            }
+
+            @Override
             public void onPageFinished(WebView view, String url) {
                 CookieManager.getInstance().flush();
                 tryAutofill(url);
@@ -91,6 +105,27 @@ public class PoncleLoginActivity extends Activity {
         webView.loadUrl(baseUrl + "/open/mobile");
     }
 
+    /** True if the URL's host is poncle.co.kr or a subdomain of it. */
+    private boolean isPoncleHost(Uri uri) {
+        String host = uri == null ? null : uri.getHost();
+        return host != null && (host.equals("poncle.co.kr") || host.endsWith(".poncle.co.kr"));
+    }
+
+    private boolean isPoncleHost(String url) {
+        try { return isPoncleHost(Uri.parse(url)); } catch (Exception e) { return false; }
+    }
+
+    /** True only for the real Poncle login page (host-checked, path /member/login). */
+    private boolean isLoginUrl(String url) {
+        try {
+            Uri u = Uri.parse(url);
+            String path = u.getPath();
+            return isPoncleHost(u) && path != null && path.contains("/member/login");
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     /**
      * Auto-detect a successful login so the user doesn't have to tap 로그인 완료:
      * once we've been on the /member/login page and then land back on a non-login
@@ -99,12 +134,12 @@ public class PoncleLoginActivity extends Activity {
      */
     private void maybeAutoComplete(String url) {
         if (finished || url == null || !url.startsWith("http")) return;
-        if (url.contains("/member/login")) {
+        if (isLoginUrl(url)) {
             sawLogin = true; // on the login page; wait for the user to log in
             return;
         }
         if (!sawLogin) return;              // only after a real login attempt
-        if (!url.contains("poncle")) return; // stay within Poncle (ignore captcha frames)
+        if (!isPoncleHost(url)) return;     // stay within Poncle (ignore captcha frames)
         String cookie = CookieManager.getInstance().getCookie(baseUrl);
         if (cookie != null && !cookie.trim().isEmpty()) {
             finished = true;
@@ -134,7 +169,7 @@ public class PoncleLoginActivity extends Activity {
      *  native side when the form is submitted. Values are only committed later,
      *  after login succeeds (see commitPendingCreds). */
     private void injectCaptureHook(String url) {
-        if (url == null || !url.contains("/member/login") || webView == null) return;
+        if (webView == null || !isLoginUrl(url)) return;
         String js =
             "(function(){if(window.__credHook)return;window.__credHook=1;"
             + "function g(){"
@@ -167,7 +202,7 @@ public class PoncleLoginActivity extends Activity {
      * arbitrary passwords can't break out of the injected JS string.
      */
     private void tryAutofill(String url) {
-        if (url == null || !url.contains("/member/login")) return;
+        if (!isLoginUrl(url)) return;
         try {
             String id = CredStore.getId(this);
             String pw = CredStore.getPw(this);

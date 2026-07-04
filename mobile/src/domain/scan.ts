@@ -6,7 +6,7 @@
  */
 import { candidateOpenDateBounds, dueWithin } from "./expiry";
 import type { History } from "./history";
-import { PoncleClient, PoncleGateway, SessionExpired } from "./poncle-client";
+import { NetworkError, PoncleClient, PoncleGateway, SessionExpired } from "./poncle-client";
 import { PlainDate, toIso, today } from "./plaindate";
 import type { AppConfig, DueItem, PoncleRow } from "./types";
 
@@ -56,16 +56,9 @@ export async function runScan(
 ): Promise<ScanResult> {
   const empty = { results: [] as DueItem[], targets: 0, sent: 0, pending: 0 };
 
-  let ok = false;
-  try {
-    ok = await gw.check();
-  } catch {
-    ok = false;
-  }
-  if (!ok) {
-    return { status: "session_expired", state: "session_expired", ...empty };
-  }
-
+  // No separate session probe: the first fetch surfaces session-expired vs a
+  // retryable network error, so a transient network blip is not misreported as
+  // a logout (and does not force a pointless re-login).
   const client = new PoncleClient(gw, cfg);
   const bounds = candidateOpenDateBounds(cfg, todayD);
   let rows: PoncleRow[];
@@ -75,15 +68,20 @@ export async function runScan(
     if (e instanceof SessionExpired) {
       return { status: "session_expired", state: "session_expired", ...empty };
     }
+    if (e instanceof NetworkError) {
+      return { status: "error", state: "error", error: "네트워크 오류로 스캔에 실패했습니다. 잠시 후 다시 시도하세요.", ...empty };
+    }
     return { status: "error", state: "error", error: String(e), ...empty };
   }
 
+  // Load the dedup keys once (not per row) so a large history isn't re-parsed N times.
+  const sentKeys = await history.dedupKeySet();
   const results: DueItem[] = [];
   for (const row of rows) {
     for (const [offset, expiry] of dueWithin(row, cfg, todayD)) {
       const item = entryFromRow(row, offset, expiry);
-      item.already_sent = await history.alreadySent(item.phone, item.expiry_date);
       item.id = `${item.phone}|${item.expiry_date}`;
+      item.already_sent = sentKeys.has(item.id);
       results.push(item);
     }
   }

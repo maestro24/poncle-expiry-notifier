@@ -63,10 +63,16 @@ describe("History", () => {
 });
 
 describe("runScan", () => {
-  it("session expired when gateway.check is false", async () => {
-    const gw = { check: async () => false, listOpen: async () => ({ ok: true, total: 0, list: [] as PoncleRow[] }) };
+  it("session expired when listOpen returns ok:false (login page)", async () => {
+    const gw = { check: async () => true, listOpen: async () => ({ ok: false, total: 0, list: [] as PoncleRow[] }) };
     const res = await runScan(gw, cfg(), new History(memKV()), TODAY);
     expect(res.status).toBe("session_expired");
+  });
+
+  it("network error (retryable) reports error state, not session_expired", async () => {
+    const gw = { check: async () => true, listOpen: async () => ({ ok: false, netError: true, total: 0, list: [] as PoncleRow[] }) };
+    const res = await runScan(gw, cfg(), new History(memKV()), TODAY);
+    expect(res.status).toBe("error");
   });
 
   it("builds the due list, ignores not-due rows, marks already_sent, sorts unsent first", async () => {
@@ -129,7 +135,7 @@ describe("sendAlert", () => {
     const sendSms = vi.fn(async () => { throw new Error("permission denied"); });
     const res = await sendAlert(item, cfg({ deliver_alerts: true }), { history, sendSms, nowIso });
     expect(res.status).toBe("error");
-    expect(res.error).toContain("문자 전송 실패");
+    expect(res.error).toContain("permission denied"); // native reason surfaced as-is
     expect(await history.alreadySent(item.phone, item.expiry_date)).toBe(false);
   });
 });

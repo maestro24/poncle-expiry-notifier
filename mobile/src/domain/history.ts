@@ -43,6 +43,10 @@ function dedupKey(phone: string, expiry: string): string {
 }
 
 export class History {
+  // Serializes mutations so concurrent recordSent calls can't interleave their
+  // read-modify-write over the whole JSON blob (double-record / lost-write race).
+  private lock: Promise<unknown> = Promise.resolve();
+
   constructor(private kv: KV) {}
 
   private async all(): Promise<SentRecord[]> {
@@ -66,16 +70,31 @@ export class History {
     return rows.some((r) => dedupKey(r.phone, r.expiry_date) === key);
   }
 
-  /** Insert (dedup). Returns true if newly inserted, false if already present. */
-  async recordSent(entry: Omit<SentRecord, "channel" | "sent_at">, channel: string, nowIso: string): Promise<boolean> {
+  /** All sent dedup keys ("phone|expiry") as a Set, for O(1) membership during a
+   *  scan (avoids re-parsing the whole store once per due row). */
+  async dedupKeySet(): Promise<Set<string>> {
     const rows = await this.all();
-    const key = dedupKey(entry.phone, entry.expiry_date);
-    if (rows.some((r) => dedupKey(r.phone, r.expiry_date) === key)) {
-      return false;
-    }
-    rows.push({ ...entry, channel, sent_at: nowIso });
-    await this.writeAll(rows);
-    return true;
+    return new Set(rows.map((r) => dedupKey(r.phone, r.expiry_date)));
+  }
+
+  /** Insert (dedup). Returns true if newly inserted, false if already present.
+   *  Serialized against other recordSent calls so the read-modify-write is atomic. */
+  async recordSent(entry: Omit<SentRecord, "channel" | "sent_at">, channel: string, nowIso: string): Promise<boolean> {
+    const task = this.lock.then(async () => {
+      const rows = await this.all();
+      const key = dedupKey(entry.phone, entry.expiry_date);
+      if (rows.some((r) => dedupKey(r.phone, r.expiry_date) === key)) {
+        return false;
+      }
+      rows.push({ ...entry, channel, sent_at: nowIso });
+      await this.writeAll(rows);
+      return true;
+    });
+    this.lock = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    return task;
   }
 
   /** History screen: successful sends, newest first, optional text/date filter.

@@ -8,7 +8,11 @@ import { PlainDate, addMonths } from "./plaindate";
 import { parseOpendate } from "./expiry";
 import type { AppConfig, PoncleRow } from "./types";
 
+/** Poncle answered with the login page: the session is genuinely expired. */
 export class SessionExpired extends Error {}
+
+/** A retryable transport failure (timeout / IO / non-200), NOT a logout. */
+export class NetworkError extends Error {}
 
 /** Server date filter looks unreliable -> fall back to a bounded full scan. */
 class FilterIneffective extends Error {
@@ -17,11 +21,15 @@ class FilterIneffective extends Error {
   }
 }
 
-/** One authenticated GET returning {ok,total,list}. Native plugin implements it. */
+/** One authenticated GET returning {ok,total,list,netError?}. Native plugin implements it. */
 export interface PoncleGateway {
   check(): Promise<boolean>;
-  listOpen(params: Record<string, string>): Promise<{ ok: boolean; total: number; list: PoncleRow[] }>;
+  listOpen(
+    params: Record<string, string>,
+  ): Promise<{ ok: boolean; total: number; list: PoncleRow[]; netError?: boolean }>;
 }
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 function baseParams(
   start: number,
@@ -62,14 +70,22 @@ export class PoncleClient {
   ) {}
 
   private async get(params: Record<string, string>): Promise<{ total: number; list: PoncleRow[] }> {
-    const res = await this.gw.listOpen(params);
-    if (!res.ok) throw new SessionExpired("listOpen did not return data (session likely expired)");
-    return { total: res.total, list: res.list };
+    // Retry transport errors a few times with backoff; a genuine session-expired
+    // (netError falsy) fails fast so the caller shows the re-login banner.
+    for (let attempt = 0; ; attempt++) {
+      const res = await this.gw.listOpen(params);
+      if (res.ok) return { total: res.total, list: res.list };
+      if (!res.netError) {
+        throw new SessionExpired("listOpen did not return data (session likely expired)");
+      }
+      if (attempt >= 2) throw new NetworkError("네트워크 오류로 스캔에 실패했습니다");
+      await sleep(400 * (attempt + 1));
+    }
   }
 
   /** Fetch every row whose opendate falls in [sdate, edate] via the server filter. */
   private async fetchByDateRange(sdate: string, edate: string): Promise<PoncleRow[]> {
-    const scale = int(this.config.page_size, 100);
+    const scale = Math.max(1, int(this.config.page_size, 100));
     const collected = new Map<string, PoncleRow>();
     const first = await this.get(baseParams(0, scale, sdate, edate));
     const total = first.total;
@@ -79,7 +95,8 @@ export class PoncleClient {
     if (total > scale * 400) throw new FilterIneffective(total);
     for (const r of first.list) collected.set(rowKey(r), r);
     let start = scale;
-    while (start < total) {
+    const maxPages = 2000; // absolute safety cap (mirror fetchRecent)
+    for (let i = 0; i < maxPages && start < total; i++) {
       const pg = await this.get(baseParams(start, scale, sdate, edate));
       for (const r of pg.list) collected.set(rowKey(r), r);
       if (pg.list.length === 0) break;
@@ -90,7 +107,7 @@ export class PoncleClient {
 
   /** Full-scan fallback: page rows opendate-desc, stop past `earliest`. */
   private async fetchRecent(earliest: PlainDate): Promise<PoncleRow[]> {
-    const scale = int(this.config.page_size, 100);
+    const scale = Math.max(1, int(this.config.page_size, 100));
     const lookbackMonths = int(this.config.scan_lookback_months, 40);
     const hardFloor = addMonths(today0(), -lookbackMonths);
     const floor = earliest.getTime() > hardFloor.getTime() ? earliest : hardFloor;

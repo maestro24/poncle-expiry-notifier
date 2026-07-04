@@ -153,22 +153,32 @@ public class PonclePlugin extends Plugin {
             params.put(k, String.valueOf(paramsObj.opt(k)));
         }
         io.execute(() -> {
+            JSObject ret = new JSObject();
             try {
                 JSONObject data = getListOpen(baseUrl, params);
-                JSObject ret = new JSObject();
                 if (data == null || !data.has("list")) {
+                    // 200 but not data JSON == the login page == session expired.
                     ret.put("ok", false);
+                    ret.put("netError", false);
                     ret.put("total", 0);
                     ret.put("list", new JSArray());
                     call.resolve(ret);
                     return;
                 }
                 ret.put("ok", true);
+                ret.put("netError", false);
                 ret.put("total", parseTotal(data.opt("total")));
                 ret.put("list", toJSArray(data.optJSONArray("list")));
                 call.resolve(ret);
             } catch (Exception e) {
-                call.reject("listOpen failed: " + e.getMessage());
+                // Transport failure (timeout / IO / non-200): retryable, NOT a
+                // logout. Signal netError so the TS layer can retry / show a
+                // network banner instead of forcing a pointless re-login.
+                ret.put("ok", false);
+                ret.put("netError", true);
+                ret.put("total", 0);
+                ret.put("list", new JSArray());
+                call.resolve(ret);
             }
         });
     }
@@ -200,10 +210,10 @@ public class PonclePlugin extends Plugin {
         }
         try {
             int code = conn.getResponseCode();
-            if (code != 200) return null;
+            if (code != 200) throw new java.io.IOException("HTTP " + code); // transport error
             String body = readBody(conn);
             String trimmed = body.trim();
-            if (!trimmed.startsWith("{")) return null; // login page is HTML
+            if (!trimmed.startsWith("{")) return null; // login page is HTML (session expired)
             JSONObject data = new JSONObject(trimmed);
             return data.has("list") ? data : null;
         } finally {

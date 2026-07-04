@@ -41,8 +41,9 @@ export async function sendAlert(item: DueItem, cfg: AppConfig, deps: SendDeps): 
     try {
       await deps.sendSms(phone, text);
     } catch (e) {
+      // Native SmsPlugin already rejects with a user-facing Korean reason.
       const msg = e instanceof Error ? e.message : String(e);
-      return { status: "error", error: "문자 전송 실패: " + msg };
+      return { status: "error", error: msg || "문자 전송 실패" };
     }
     channel = "sms";
   } else {

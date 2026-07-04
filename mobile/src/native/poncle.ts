@@ -15,8 +15,11 @@ import type { PoncleRow } from "../domain/types";
 
 export interface ListOpenResult {
   /** True when the response was real data JSON; false when Poncle answered with
-   *  the login page (session expired). */
+   *  the login page (session expired) OR a transport error (see netError). */
   ok: boolean;
+  /** True when ok is false due to a retryable transport error (timeout/IO/non-200),
+   *  as opposed to a genuine session-expired login page. */
+  netError?: boolean;
   total: number;
   list: PoncleRow[];
 }

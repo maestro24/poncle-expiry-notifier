@@ -5,9 +5,10 @@ const config: CapacitorConfig = {
   appName: "약정만료 알리미",
   webDir: "dist",
   android: {
-    // We reuse the customer's real Poncle login session via a WebView, so keep
-    // cookies/localStorage persistent across app launches.
-    webContentsDebuggingEnabled: true,
+    // OFF in shipped builds: this app autofills the Poncle password into a login
+    // WebView and holds customer PII, so remote WebView debugging (chrome://inspect
+    // over ADB) must not be exposed. Flip to true only for local development.
+    webContentsDebuggingEnabled: false,
   },
 };
 
