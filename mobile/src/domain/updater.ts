@@ -46,6 +46,18 @@ export function cmpVersions(a: number[], b: number[]): number {
   return 0;
 }
 
+/** The APK download must come from GitHub's own release hosts — guards against a
+ *  manipulated release JSON pointing the installer at an arbitrary URL. */
+export function isTrustedApkUrl(url: unknown): boolean {
+  if (typeof url !== "string" || !url) return false;
+  try {
+    const h = new URL(url).hostname.toLowerCase();
+    return h === "github.com" || h === "objects.githubusercontent.com" || h.endsWith(".githubusercontent.com");
+  } catch {
+    return false;
+  }
+}
+
 /** Choose the newest android-v* release and decide whether it beats `current`. */
 export function pickAndroidUpdate(releases: GhRelease[], current: string): UpdateInfo {
   const cur = parseVersion(current) ?? [0];
@@ -63,11 +75,17 @@ export function pickAndroidUpdate(releases: GhRelease[], current: string): Updat
     return { available: false, version, url: "", notes: "" };
   }
   const assets = best.rel.assets ?? [];
-  const apk = assets.find((a) => a.name.toLowerCase().endsWith(".apk"));
+  // Only a real .apk asset served from a trusted GitHub host — no fallback to a
+  // random first asset, no arbitrary URL. If none qualifies, don't offer a broken
+  // (un-installable) update.
+  const apk = assets.find(
+    (a) => typeof a.name === "string" && a.name.toLowerCase().endsWith(".apk") && isTrustedApkUrl(a.browser_download_url),
+  );
+  if (!apk) return { available: false, version, url: "", notes: "" };
   return {
     available: true,
     version,
-    url: apk?.browser_download_url ?? assets[0]?.browser_download_url ?? "",
+    url: apk.browser_download_url,
     notes: (best.rel.body || best.rel.name || "").trim(),
   };
 }

@@ -40,8 +40,19 @@ public class AppUpdatePlugin extends Plugin {
             call.reject("url is required");
             return;
         }
+        // Scheme allowlist — this is a generic ACTION_VIEW sink; only ever hand it a
+        // web link (APK download) or a dialer link. Block market:/intent:/content:/
+        // file:/javascript: etc. so a future (or manipulated) caller can't launch an
+        // arbitrary intent.
+        Uri uri = Uri.parse(url);
+        String scheme = uri.getScheme();
+        scheme = scheme == null ? "" : scheme.toLowerCase();
+        if (!scheme.equals("http") && !scheme.equals("https") && !scheme.equals("tel")) {
+            call.reject("unsupported url scheme");
+            return;
+        }
         try {
-            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+            Intent intent = new Intent(Intent.ACTION_VIEW, uri);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             getContext().startActivity(intent);
             call.resolve();

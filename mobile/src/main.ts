@@ -347,6 +347,13 @@ async function doConfirmSend(): Promise<void> {
     return;
   }
 
+  // In-flight 가드는 양 모드(실제 발송/기록 전용) 공통으로 잡는다 — 같은 고객에 대한
+  // 동시 처리(모드 전환 중 겹침 포함)를 막고, 아래 getRecord(prev) 읽기가 다른 발송의
+  // 쓰기와 겹치지 않도록 보장한다.
+  const key = `${item.phone}|${item.expiry_date}`;
+  if (sendingKeys.has(key)) { toast("이미 처리 중입니다"); return; } // 중복 처리 방지
+  sendingKeys.add(key);
+
   // 재발송이면 기존 안내 이력을 이번 발송으로 업데이트(upsert). prev = 직전 기록(있으면).
   const prev = await history.getRecord(item.phone, item.expiry_date);
   const rec: SentRecord = {
@@ -357,19 +364,22 @@ async function doConfirmSend(): Promise<void> {
 
   // Record-only mode (실제 발송 꺼짐): 기록/업데이트만, 문자 안 보냄.
   if (!CFG.deliver_alerts) {
-    await history.putRecord(rec);
-    markHandled(item);
-    await history.cacheDueList(RESULTS);
-    toast(prev ? "안내 이력을 업데이트했습니다 (미발송)" : "기록되었습니다 (실제 발송 꺼짐)");
+    try {
+      await history.putRecord(rec);
+      markHandled(item);
+      await history.cacheDueList(RESULTS);
+      toast(prev ? "안내 이력을 업데이트했습니다 (미발송)" : "기록되었습니다 (실제 발송 꺼짐)");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "저장 실패 — 다시 시도하세요", { err: true });
+    } finally {
+      sendingKeys.delete(key);
+    }
     return;
   }
 
   // Deliver ON — 낙관적: 기록/업데이트 + 홈 처리 즉시, 전송은 백그라운드.
-  const key = `${item.phone}|${item.expiry_date}`;
-  if (sendingKeys.has(key)) { toast("이미 발송 중입니다"); return; } // 중복 발송 방지
-  sendingKeys.add(key);
   // 발송이 실제로 시작되기 전(기록/캐시 저장 단계)에 실패하면 in-flight 가드를 반드시
-  // 풀어 준다 — 안 그러면 그 고객이 세션 내내 "이미 발송 중"으로 막힌다.
+  // 풀어 준다 — 안 그러면 그 고객이 세션 내내 "이미 처리 중"으로 막힌다.
   try {
     await history.putRecord(rec); // 신규면 insert, 재발송이면 update
     markHandled(item);

@@ -48,7 +48,8 @@ function errorResult(e: unknown, empty: { results: DueItem[]; unvisited: DueItem
  *  - 요금제 유지 (1단계, source=keepdate): 폰클 요금제유지 미결의 유지일(Pass A),
  *    없으면 개통 + 기본 개월(Pass B). 모든 개통 대상.
  *  - 약정 만료 (2단계, source=term): 약정 대상(신규/번호이동/기변)만, 개통 + 약정 개월(Pass C).
- * phone|만료일로 병합하므로 한 고객의 1·2단계 알림이 각각 살아남는다(만료일이 달라 충돌 없음).
+ * phone|만료일로 병합하므로 한 고객의 1·2단계 알림이 각각 살아남는다(보통 만료일이 다름).
+ * 만료일이 같아 충돌하는 드문 경우엔 약정 만료(term)가 우선한다.
  */
 export async function runScan(
   gw: PoncleGateway,
@@ -127,9 +128,14 @@ export async function runScan(
     termItems.push(item);
   }
 
-  // Merge by id (phone|만료일) so a customer's 1단계 + 2단계 coexist (different dates).
+  // Merge by id (phone|만료일) so a customer's 1단계 + 2단계 coexist (normally
+  // different dates). On the RARE same-date collision — e.g. keepdate 기본 개월 ==
+  // 약정 개월 (both are user-editable in 설정), or a 폰클 유지일 that lands exactly on
+  // 개통+약정 — the 약정 만료(term) milestone WINS (term is listed first, first-wins).
+  // 약정 만료가 계약 고객에게 더 실행가능한 알림이며, 이렇게 하지 않으면 term이 조용히
+  // 사라져 계약 만료 안내를 놓친다.
   const byKey = new Map<string, DueItem>();
-  for (const it of [...keepItems, ...stage1Default, ...termItems]) {
+  for (const it of [...termItems, ...keepItems, ...stage1Default]) {
     const key = `${it.phone}|${it.expiry_date}`;
     if (!byKey.has(key)) byKey.set(key, it);
   }

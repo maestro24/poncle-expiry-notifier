@@ -283,6 +283,32 @@ describe("runScan", () => {
     expect(res.status).toBe("ok"); // due list still stands (term-only degrade)
     expect(res.pendingDegraded).toBe(true);
   });
+
+  it("same-date collision (keepdate 기본 개월 == 약정 개월): term(약정 만료) wins, not dropped", async () => {
+    // 기변 opened 2026-01-03; with BOTH months = 6, keepdate(개통+6) and term(개통+6)
+    // both land on 2026-07-03 == TODAY and collide on phone|expiry. term must win.
+    const row: PoncleRow = { openphone: "010-5555-6666", customer: "박충돌", opendate: "26-01-03",
+      openhowx: "기변", telecomx: "KT", agencytitle: "대리점", model: "S24" };
+    const res = await runScan(
+      gatewayReturning([row]),
+      cfg({ default_term_months: 6, keepdate_default_months: 6, use_server_date_filter: false }),
+      new History(memKV()),
+      TODAY,
+    );
+    const mine = res.results.filter((r) => r.phone === "010-5555-6666");
+    expect(mine).toHaveLength(1); // one row, not a silent-drop and not a duplicate
+    expect(mine[0].source).toBe("term");
+    expect(mine[0].expiry_date).toBe("2026-07-03");
+  });
+
+  it("distinct dates (default config): a contract customer keeps BOTH milestones", async () => {
+    // 기변 opened 2024-07-03: keepdate 개통+6 = 2025-01-03 (past, not due), term 개통+24
+    // = 2026-07-03 = TODAY. Only term is due today; sanity that term still surfaces.
+    const res = await runScan(gatewayReturning([dueRow]), cfg({ use_server_date_filter: false }), new History(memKV()), TODAY);
+    const mine = res.results.filter((r) => r.phone === "010-1111-2222");
+    expect(mine).toHaveLength(1);
+    expect(mine[0].source).toBe("term");
+  });
 });
 
 describe("sendAlert", () => {

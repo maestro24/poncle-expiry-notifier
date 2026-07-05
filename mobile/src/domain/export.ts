@@ -56,12 +56,78 @@ export function buildBackup(config: AppConfig | null, history: SentRecord[], now
   return { app: "poncle-expiry", version: 1, exported_at: nowIso, config, history };
 }
 
-/** Parse + validate a pasted/opened backup. Returns null if it isn't one. */
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+function str(v: unknown): string {
+  return typeof v === "string" ? v : v == null ? "" : String(v);
+}
+
+/** Host allowlist for a restored/entered poncle_base_url — must be poncle.co.kr
+ *  (or a subdomain). Blocks a malicious/typo backup from repointing native traffic
+ *  (session cookie, scan requests) at an arbitrary host. */
+export function isAllowedPoncleBaseUrl(url: unknown): boolean {
+  if (typeof url !== "string" || !url) return false;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "https:" && u.protocol !== "http:") return false;
+    const h = u.hostname.toLowerCase();
+    return h === "poncle.co.kr" || h.endsWith(".poncle.co.kr");
+  } catch {
+    return false;
+  }
+}
+
+/** Coerce one untrusted backup element into a well-formed SentRecord. Returns null
+ *  when the essential keys (phone + expiry_date) are missing, so a corrupt/hostile
+ *  file can't inject non-string fields that later throw (e.g. sent_at.slice) or
+ *  collide the dedup key. */
+export function sanitizeRecord(raw: unknown): SentRecord | null {
+  if (!isRecord(raw)) return null;
+  const phone = str(raw.phone).trim();
+  const expiry = str(raw.expiry_date).trim();
+  if (!phone || !expiry) return null;
+  const offset = Number(raw.milestone_offset);
+  const rec: SentRecord = {
+    phone,
+    customer: str(raw.customer),
+    opendate: str(raw.opendate),
+    expiry_date: expiry,
+    milestone_offset: Number.isFinite(offset) ? offset : 0,
+    telecom: str(raw.telecom),
+    agency: str(raw.agency),
+    plan: str(raw.plan),
+    model: str(raw.model),
+    openhow: str(raw.openhow),
+    staff: str(raw.staff),
+    channel: str(raw.channel) || "sms",
+    sent_at: str(raw.sent_at),
+  };
+  if (raw.body != null) rec.body = str(raw.body);
+  return rec;
+}
+
+/** Sanitize a restored config: drop a poncle_base_url that isn't an allowed host
+ *  (falls back to the default on merge) so a hostile backup can't repoint traffic. */
+function sanitizeConfig(raw: unknown): AppConfig | null {
+  if (!isRecord(raw)) return null;
+  if ("poncle_base_url" in raw && !isAllowedPoncleBaseUrl(raw.poncle_base_url)) {
+    const { poncle_base_url: _dropped, ...rest } = raw;
+    return rest as unknown as AppConfig;
+  }
+  return raw as unknown as AppConfig;
+}
+
+/** Parse + validate a pasted/opened backup. Returns null if it isn't one. Untrusted
+ *  records are coerced to the SentRecord shape (bad ones dropped) and a config with a
+ *  non-poncle base URL has that field stripped. */
 export function parseBackup(text: string): Backup | null {
   try {
     const obj = JSON.parse(text);
-    if (!obj || obj.app !== "poncle-expiry" || !Array.isArray(obj.history)) return null;
-    return obj as Backup;
+    if (!isRecord(obj) || obj.app !== "poncle-expiry" || !Array.isArray(obj.history)) return null;
+    const history = obj.history.map(sanitizeRecord).filter((r): r is SentRecord => r !== null);
+    const config = obj.config == null ? null : sanitizeConfig(obj.config);
+    return { app: "poncle-expiry", version: 1, exported_at: str(obj.exported_at), config, history };
   } catch {
     return null;
   }
