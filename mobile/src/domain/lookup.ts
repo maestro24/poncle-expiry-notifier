@@ -103,12 +103,10 @@ export function buildLookupResults(
     });
   }
 
-  // Soonest-expiring first; 무약정 (no expiry) last.
-  return out.sort((a, b) => {
-    if (!a.expiry_date) return b.expiry_date ? 1 : 0;
-    if (!b.expiry_date) return -1;
-    return a.expiry_date < b.expiry_date ? -1 : a.expiry_date > b.expiry_date ? 1 : 0;
-  });
+  // Most recently opened contract first (opendate desc) — the freshest 개통/재계약
+  // on top. opendate is "yy-mm-dd", so a lexical compare orders correctly within
+  // the 2000s (same convention as PoncleClient's latest-opendate lookup).
+  return out.sort((a, b) => (a.opendate < b.opendate ? 1 : a.opendate > b.opendate ? -1 : 0));
 }
 
 /** A DueItem view of a lookup result, so the existing send flow (onSend) works. */
