@@ -39,6 +39,7 @@ const history = new History(preferencesKV());
 let CFG: AppConfig = { ...DEFAULTS };
 let RESULTS: DueItem[] = [];
 let LAST_SCAN = "";
+let SCANNING = false; // a scan is in flight and owns the session/error banner
 let DUE_QUERY = "";
 let DUE_FILTER: "all" | "unsent" = "all";
 let HIST_TAB: "sent" | "unvisited" = "sent";
@@ -373,6 +374,7 @@ async function doScan(): Promise<void> {
   btn.disabled = true;
   const prev = btn.textContent;
   btn.textContent = "스캔 중…";
+  SCANNING = true; // a scan owns the session/error banner until it finishes
   try {
     const res = await runScan(nativePoncleGateway(CFG), CFG, history);
     LAST_SCAN = nowShort();
@@ -398,6 +400,7 @@ async function doScan(): Promise<void> {
     renderDueList();
     renderState("idle");
   } finally {
+    SCANNING = false; // release the banner before re-enabling the button
     btn.disabled = false;
     btn.textContent = prev;
   }
@@ -1176,6 +1179,12 @@ function bind(): void {
   $("#btn-retry").onclick = () => void doScan();
   $("#btn-test-target").onclick = () => void addTestTarget();
 
+  // Returning to the foreground: re-check the session so a stale "세션 만료" banner
+  // clears once the native layer has restored the persisted cookie.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") void onForeground();
+  });
+
   // Home due-list search + filter
   $("#due-query").addEventListener("input", (e) => {
     DUE_QUERY = (e.target as HTMLInputElement).value;
@@ -1326,6 +1335,35 @@ async function refreshHome(): Promise<void> {
   const hasSession = await poncleHasSession(CFG).catch(() => false);
   showBanner(hasSession ? "none" : "session");
   if (hasSession) await doScan();
+}
+
+/**
+ * Re-check the session when the app returns to the foreground, to clear a now-stale
+ * "세션 만료" banner once the native layer has restored the persisted cookie. Two
+ * deliberate choices:
+ *  - We only act when a session banner is actually showing (nothing else to fix),
+ *    which also means we only hit the network in the recovery case.
+ *  - We probe with the authoritative check() (a real listOpen round-trip), NOT mere
+ *    cookie presence: the restored cookie is present even after a *server-side*
+ *    timeout, so a presence check would wrongly clear a legitimate banner. We clear
+ *    ONLY on a positive probe; a negative result (true expiry OR a transient network
+ *    error — check() can't tell them apart) leaves the banner untouched. We never
+ *    force a scan; the user taps 스캔 when ready.
+ */
+let resumeChecking = false;
+async function onForeground(): Promise<void> {
+  if (resumeChecking || SCANNING) return; // a scan owns the banner; don't race it
+  if ($("#session-banner").classList.contains("hidden")) return; // nothing to recover
+  resumeChecking = true;
+  try {
+    const ok = await nativePoncleGateway(CFG).check().catch(() => false);
+    if (SCANNING) return; // a scan started during the probe — let it set the banner
+    // Re-read: state may have changed while the probe was in flight.
+    if ($("#session-banner").classList.contains("hidden")) return;
+    if (ok) showBanner("none"); // session genuinely valid again — clear stale banner
+  } finally {
+    resumeChecking = false;
+  }
 }
 
 /* ---------- boot ---------- */

@@ -45,6 +45,13 @@ public class PonclePlugin extends Plugin {
 
     private final ExecutorService io = Executors.newSingleThreadExecutor();
 
+    /** One-shot per process: restore the persisted cookie the first time we need
+     *  a session, so it survives the OS recreating the app (see CookieStore). */
+    private volatile boolean restoreAttempted = false;
+    /** Last cookie value we wrote to CookieStore, so a multi-page scan doesn't
+     *  re-encrypt+write the identical string on every page. */
+    private volatile String lastSavedCookie = null;
+
     private String base(PluginCall call) {
         String b = call.getString("baseUrl", DEFAULT_BASE);
         if (b == null || b.isEmpty()) b = DEFAULT_BASE;
@@ -64,6 +71,12 @@ public class PonclePlugin extends Plugin {
     private void loginResult(PluginCall call, ActivityResult result) {
         if (call == null) return;
         boolean ok = result != null && result.getResultCode() == Activity.RESULT_OK;
+        // A fresh login just populated CookieManager — persist it so the session
+        // survives the next process death (the core of the "keep me logged in" fix).
+        if (ok) {
+            final String b = base(call);
+            io.execute(() -> saveSessionCookie(b));
+        }
         JSObject ret = new JSObject();
         ret.put("ok", ok);
         call.resolve(ret);
@@ -74,15 +87,105 @@ public class PonclePlugin extends Plugin {
         CookieManager cm = CookieManager.getInstance();
         cm.removeAllCookies(null);
         cm.flush();
+        // Also drop the persisted copy, else the next launch would restore it.
+        CookieStore.clear(getContext());
+        lastSavedCookie = null;
+        restoreAttempted = true; // nothing to restore after an explicit logout
         call.resolve();
     }
 
     @PluginMethod
     public void hasSession(PluginCall call) {
-        String cookie = CookieManager.getInstance().getCookie(base(call));
-        JSObject ret = new JSObject();
-        ret.put("value", cookie != null && !cookie.trim().isEmpty());
-        call.resolve(ret);
+        final String baseUrl = base(call);
+        io.execute(() -> {
+            restoreSessionCookieIfNeeded(baseUrl);
+            String cookie = CookieManager.getInstance().getCookie(baseUrl);
+            JSObject ret = new JSObject();
+            ret.put("value", cookie != null && !cookie.trim().isEmpty());
+            call.resolve(ret);
+        });
+    }
+
+    // -- session cookie persistence -----------------------------------------
+    /** Persist the current live cookie (encrypted) so it outlives the process.
+     *  No-op when there's no cookie or it hasn't changed since the last save. */
+    private void saveSessionCookie(String base) {
+        try {
+            String cookie = CookieManager.getInstance().getCookie(base);
+            if (cookie == null || cookie.trim().isEmpty()) return;
+            if (cookie.equals(lastSavedCookie)) return;
+            CookieStore.save(getContext(), base, cookie);
+            lastSavedCookie = cookie;
+        } catch (Exception ignored) {
+            // best-effort; a storage failure must never break a scan/login
+        }
+    }
+
+    /** First time this process needs a session, re-inject the persisted cookie.
+     *  Runs at most once per process — but only marks itself consumed after a
+     *  *successful* attempt, so a transient KeyStore/store read failure lets a
+     *  later same-process call retry rather than permanently losing the session.
+     *
+     *  We must NOT skip merely because CookieManager has *some* cookie: Android
+     *  reloads persistent cookies (Poncle sets SCALE with a 2-year Expires) across
+     *  process death while dropping the memory-only session cookie (PHPSESSID). So
+     *  we restore unless *every* saved cookie name is already live — i.e. the full
+     *  saved session is intact. Cookies are set one pair at a time (setCookie is
+     *  unreliable with a semicolon-joined string). Runs on the single io thread,
+     *  so no locking is needed around the flag. */
+    private void restoreSessionCookieIfNeeded(String base) {
+        if (restoreAttempted) return;
+        try {
+            String saved = CookieStore.getCookie(getContext());
+            if (saved == null || saved.trim().isEmpty()) { restoreAttempted = true; return; } // nothing persisted
+            CookieManager cm = CookieManager.getInstance();
+            String live = cm.getCookie(base);
+            if (allSavedNamesLive(live, saved)) { restoreAttempted = true; return; } // full session already present
+            String savedUrl = CookieStore.getUrl(getContext());
+            String url = (savedUrl == null || savedUrl.isEmpty()) ? base : savedUrl;
+            cm.setAcceptCookie(true);
+            for (String pair : saved.split(";")) {
+                String p = pair.trim();
+                if (!p.isEmpty()) cm.setCookie(url, p);
+            }
+            cm.flush();
+            lastSavedCookie = saved;   // don't immediately re-write the same value
+            restoreAttempted = true;   // success — consume the one-shot
+        } catch (Exception ignored) {
+            // best-effort; leave restoreAttempted=false so a later call retries
+        }
+    }
+
+    /** True when every cookie name in `saved` is also present in `live` — i.e. the
+     *  persisted session is fully intact and needs no restore. Name-agnostic, so it
+     *  stays correct even if Poncle's session cookie name (PHPSESSID) ever changes. */
+    private static boolean allSavedNamesLive(String live, String saved) {
+        java.util.Set<String> liveNames = cookieNames(live);
+        for (String pair : saved.split(";")) {
+            String name = cookieName(pair);
+            if (name != null && !liveNames.contains(name)) return false;
+        }
+        return true;
+    }
+
+    /** Extract the name from a "name=value" cookie pair, or null if malformed. */
+    private static String cookieName(String pair) {
+        if (pair == null) return null;
+        String p = pair.trim();
+        int eq = p.indexOf('=');
+        if (eq <= 0) return null;
+        return p.substring(0, eq).trim();
+    }
+
+    /** The set of cookie names in a "a=1; b=2" header string. */
+    private static java.util.Set<String> cookieNames(String header) {
+        java.util.Set<String> names = new java.util.HashSet<>();
+        if (header == null) return names;
+        for (String pair : header.split(";")) {
+            String n = cookieName(pair);
+            if (n != null) names.add(n);
+        }
+        return names;
     }
 
     // -- saved credentials (autofill) ---------------------------------------
@@ -130,9 +233,12 @@ public class PonclePlugin extends Plugin {
         final String baseUrl = base(call);
         io.execute(() -> {
             try {
+                restoreSessionCookieIfNeeded(baseUrl);
                 JSONObject data = getJson(baseUrl, "/open/listOpen", "/open/mobile", probeParams());
+                boolean valid = data != null && data.has("list");
+                if (valid) saveSessionCookie(baseUrl); // refresh the persisted copy
                 JSObject ret = new JSObject();
-                ret.put("value", data != null && data.has("list"));
+                ret.put("value", valid);
                 call.resolve(ret);
             } catch (Exception e) {
                 JSObject ret = new JSObject();
@@ -166,6 +272,7 @@ public class PonclePlugin extends Plugin {
         io.execute(() -> {
             JSObject ret = new JSObject();
             try {
+                restoreSessionCookieIfNeeded(baseUrl);
                 JSONObject data = getJson(baseUrl, path, referer, params);
                 if (data == null || !data.has("list")) {
                     // 200 but not data JSON == the login page == session expired.
@@ -176,6 +283,7 @@ public class PonclePlugin extends Plugin {
                     call.resolve(ret);
                     return;
                 }
+                saveSessionCookie(baseUrl); // keep the persisted copy fresh
                 ret.put("ok", true);
                 ret.put("netError", false);
                 ret.put("total", parseTotal(data.opt("total")));
