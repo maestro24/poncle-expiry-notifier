@@ -149,6 +149,16 @@ public class PonclePlugin extends Plugin {
                 if (!p.isEmpty()) cm.setCookie(url, p);
             }
             cm.flush();
+            // setCookie is applied ASYNCHRONOUSLY by the WebView cookie thread. On a
+            // cold start the very next native request (getJson) would otherwise read
+            // getCookie() BEFORE PHPSESSID lands and go out with only the persistent
+            // SCALE cookie -> the server returns the login page -> a FALSE "세션 만료"
+            // even though the login is valid (the WebView, opened moments later, is
+            // fine). Block (we're on the io thread) until the restored session cookie
+            // names are actually visible via getCookie, bounded to ~1s.
+            for (int i = 0; i < 40 && !allSavedNamesLive(cm.getCookie(base), saved); i++) {
+                try { Thread.sleep(25); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+            }
             lastSavedCookie = saved;   // don't immediately re-write the same value
             restoreAttempted = true;   // success — consume the one-shot
         } catch (Exception ignored) {
@@ -275,7 +285,8 @@ public class PonclePlugin extends Plugin {
                 restoreSessionCookieIfNeeded(baseUrl);
                 JSONObject data = getJson(baseUrl, path, referer, params);
                 if (data == null || !data.has("list")) {
-                    // 200 but not data JSON == the login page == session expired.
+                    // getJson returns null only for the actual login page == session
+                    // expired (other non-data responses throw -> the catch below).
                     ret.put("ok", false);
                     ret.put("netError", false);
                     ret.put("total", 0);
@@ -303,9 +314,11 @@ public class PonclePlugin extends Plugin {
     }
 
     // -- http ---------------------------------------------------------------
-    /** Authenticated GET of a Poncle list endpoint; return the parsed JSON object
-     *  if it looks like data (a JSON object with a "list"), else null (login page /
-     *  session expired). `path` e.g. "/open/listOpen"; `referer` e.g. "/open/mobile". */
+    /** Authenticated GET of a Poncle list endpoint. Returns the parsed JSON when it
+     *  is data (a JSON object with a "list"); returns null ONLY when the response is
+     *  the login page (a real session expiry); THROWS for anything else (non-200,
+     *  or an ambiguous non-data 200) so the caller treats it as a retryable error
+     *  rather than a false logout. `path` e.g. "/open/listOpen"; `referer` e.g. "/open/mobile". */
     private JSONObject getJson(String baseUrl, String path, String referer, Map<String, String> params) throws Exception {
         StringBuilder qs = new StringBuilder();
         for (Map.Entry<String, String> e : params.entrySet()) {
@@ -331,14 +344,36 @@ public class PonclePlugin extends Plugin {
         try {
             int code = conn.getResponseCode();
             if (code != 200) throw new java.io.IOException("HTTP " + code); // transport error
+            String finalUrl = conn.getURL() != null ? conn.getURL().toString() : "";
             String body = readBody(conn);
             String trimmed = body.trim();
-            if (!trimmed.startsWith("{")) return null; // login page is HTML (session expired)
-            JSONObject data = new JSONObject(trimmed);
-            return data.has("list") ? data : null;
+            if (trimmed.startsWith("{")) {
+                JSONObject data = new JSONObject(trimmed);
+                if (data.has("list")) return data; // real data
+                // JSON without "list" is abnormal but NOT a clear logout -> retryable.
+                throw new java.io.IOException("unexpected JSON (no list)");
+            }
+            // Non-JSON: only a genuine login page means the session actually expired.
+            // Any OTHER html (rate-limit/WAF block, error, maintenance) must NOT be
+            // reported as a logout — doing so produced a false "세션 만료" while the
+            // WebView (same cookies) was still logged in. Treat it as retryable.
+            if (isLoginPage(finalUrl, trimmed)) return null; // -> session expired
+            throw new java.io.IOException("non-data response (not login page)");
         } finally {
             conn.disconnect();
         }
+    }
+
+    /** Heuristic: is this response Poncle's login page (i.e. a real session expiry)?
+     *  Checks the post-redirect final URL and the login form's field names (the same
+     *  markers the WebView autofill keys on). Robust to both the 302-to-login and the
+     *  inline-login-html expiry behaviours. */
+    private static boolean isLoginPage(String finalUrl, String body) {
+        String u = finalUrl == null ? "" : finalUrl.toLowerCase();
+        if (u.contains("/member/login") || u.contains("/login")) return true;
+        if (body == null) return false;
+        return body.contains("name=\"userpw\"") || body.contains("name='userpw'")
+            || body.contains("name=\"userid\"") || body.contains("name='userid'");
     }
 
     private String readBody(HttpURLConnection conn) throws Exception {
