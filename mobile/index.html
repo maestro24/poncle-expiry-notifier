@@ -358,8 +358,9 @@
     <div class="modal">
       <div class="modal-title">문자 보내기</div>
       <div class="modal-ver"><b id="confirm-name">-</b> · <span id="confirm-phone">-</span></div>
-      <textarea id="confirm-text" class="template-area" rows="5" style="margin-top:12px"></textarea>
-      <div class="modal-hint">아래 내용 그대로 실제 문자가 발송됩니다. 필요하면 수정하세요.</div>
+      <select id="confirm-template" class="grow" style="width:100%;margin-top:12px"></select>
+      <textarea id="confirm-text" class="template-area" rows="5" style="margin-top:8px"></textarea>
+      <div class="modal-hint">템플릿을 고르거나 직접 입력하세요. 아래 내용 그대로 발송됩니다.</div>
       <div class="modal-actions">
         <button class="btn-soft" id="confirm-cancel">취소</button>
         <button class="btn-dark" id="confirm-send">보내기</button>

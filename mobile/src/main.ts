@@ -14,7 +14,7 @@ import { cleanPlan } from "./domain/plan";
 import { PoncleClient, SessionExpired } from "./domain/poncle-client";
 import { today } from "./domain/plaindate";
 import { runScan, type ScanState } from "./domain/scan";
-import { renderTemplate, sendAlert } from "./domain/sender";
+import { dueItemToEntry, renderTemplate, sendAlert } from "./domain/sender";
 import { conditionSummary, matchingTemplates } from "./domain/template-match";
 import { checkForUpdate } from "./domain/updater";
 import { MILESTONE_SOURCES, STATUSES, TELECOMS, type AppConfig, type DueItem, type MessageTemplate, type MilestoneSource, type StatusCode, type TelecomCode } from "./domain/types";
@@ -240,56 +240,20 @@ function markHandled(item: DueItem): void {
   else renderDueList();
 }
 
-async function onSend(item: DueItem, _btn: HTMLButtonElement): Promise<void> {
+function onSend(item: DueItem, _btn: HTMLButtonElement): void {
   // Record-only test rows can't demonstrate delivery; say so and stop.
   if (item.test && !CFG.deliver_alerts) {
     toast("테스트 대상: ‘실제 발송’이 꺼져 있어 아무것도 보내지 않습니다");
     return;
   }
-  // Pick the outbound template by the customer's telecom + 상태.
-  const matches = matchingTemplates(item, CFG.templates);
-  if (matches.length === 0) { openNoTemplate(); return; }
-  if (matches.length === 1) { proceedSend(item, matches[0]); return; }
-  openPicker(item, matches); // several match -> staff chooses
+  openConfirm(item); // 확인 모달에서 템플릿 선택/편집 후 발송
 }
 
-/** Render the chosen template and either confirm (real send) or record (off). */
-function proceedSend(item: DueItem, tpl: MessageTemplate): void {
-  const body = renderTemplate(item, tpl.body);
-  // Real send, or a test row while delivery is ON: confirm + preview/edit first.
-  if (CFG.deliver_alerts || item.test) { openConfirm(item, body); return; }
-  void recordOnlySend(item, body);
-}
-
-async function recordOnlySend(item: DueItem, body: string): Promise<void> {
-  const res = await sendAlert(item, CFG, { history, sendSms, nowIso }, body);
-  if (res.status === "sent" || res.status === "already") {
-    markHandled(item);
-    toast("기록되었습니다 (실제 발송 꺼짐)");
-  } else {
-    toast(res.error || "실패", { err: true });
-  }
-}
-
-/* ---------- template picker + no-template prompt ---------- */
-function openPicker(item: DueItem, matches: MessageTemplate[]): void {
-  $("#picker-name").textContent = item.customer || "-";
-  $("#picker-phone").textContent = item.phone;
-  const list = $("#picker-list");
-  list.innerHTML = "";
-  for (const t of matches) {
-    const b = document.createElement("button");
-    b.className = "picker-item";
-    b.innerHTML = `<div class="picker-item-name">${esc(t.name) || "(이름 없음)"}</div>
-      <div class="picker-item-sub">${esc(conditionSummary(t))}</div>
-      <div class="picker-item-preview">${esc(renderTemplate(item, t.body))}</div>`;
-    b.onclick = () => { $("#picker-modal").classList.add("hidden"); proceedSend(item, t); };
-    list.appendChild(b);
-  }
-  $("#picker-modal").classList.remove("hidden");
-}
-function openNoTemplate(): void {
-  $("#notpl-modal").classList.remove("hidden");
+/** Refresh whatever list is on screen after a send / restore (home / 이력 / 조회). */
+function refreshAfterSend(): void {
+  if (CURRENT === "history") void loadHistory();
+  else if (CURRENT === "lookup") void refreshLookupInformed();
+  else renderDueList();
 }
 
 /** Open the phone dialer for this customer's number (ACTION_VIEW tel:). */
@@ -303,52 +267,107 @@ async function onCall(item: DueItem): Promise<void> {
   }
 }
 
-/* ---------- confirm send modal (real send) ---------- */
+/* ---------- confirm send modal (템플릿 선택 + 편집 + 발송) ---------- */
 let confirmItem: DueItem | null = null;
-function openConfirm(item: DueItem, body: string): void {
+const MANUAL_TEMPLATE = "__manual__";
+/** Dedup keys (phone|expiry) whose SMS is currently in flight — blocks a
+ *  concurrent duplicate send of the same customer from another entry point. */
+const sendingKeys = new Set<string>();
+
+/** Recompute RESULTS[].already_sent from the live sent-log (phone|expiry), so the
+ *  home list + cache never diverge from history after a boot-restore or a failed
+ *  send (keyed off the log, not a possibly-stale captured object). */
+async function reconcileSentFlags(): Promise<void> {
+  const sent = await history.dedupKeySet();
+  for (const r of RESULTS) r.already_sent = sent.has(`${r.phone}|${r.expiry_date}`);
+}
+
+/** Fill the confirm body from a template id, or leave it as-is (직접 입력). */
+function applyConfirmTemplate(item: DueItem, id: string): void {
+  if (id === MANUAL_TEMPLATE) return; // 직접 입력: keep whatever's typed
+  const tpl = (CFG.templates || []).find((t) => t.id === id);
+  if (tpl) $<HTMLTextAreaElement>("#confirm-text").value = renderTemplate(item, tpl.body);
+}
+
+function openConfirm(item: DueItem): void {
   confirmItem = item;
   $("#confirm-name").textContent = item.customer || "-";
   $("#confirm-phone").textContent = item.phone;
-  $<HTMLTextAreaElement>("#confirm-text").value = body;
+  const templates = CFG.templates || [];
+  // Default = the auto-matched (시점-routed) template; else 직접 입력.
+  const matched = matchingTemplates(item, templates)[0];
+  const sel = $<HTMLSelectElement>("#confirm-template");
+  sel.innerHTML =
+    templates.map((t) => `<option value="${esc(t.id)}">${esc(t.name) || "(이름 없음)"}</option>`).join("") +
+    `<option value="${MANUAL_TEMPLATE}">직접 입력</option>`;
+  // Start clean every open: a matched template overwrites this; a MANUAL default
+  // stays empty (never leaves the PREVIOUS customer's message in the box).
+  $<HTMLTextAreaElement>("#confirm-text").value = "";
+  sel.value = matched?.id ?? MANUAL_TEMPLATE;
+  applyConfirmTemplate(item, sel.value);
+  sel.onchange = () => applyConfirmTemplate(item, sel.value);
+  const send = $<HTMLButtonElement>("#confirm-send");
+  send.disabled = false;
+  send.textContent = CFG.deliver_alerts || item.test ? "보내기" : "기록";
   $("#confirm-modal").classList.remove("hidden");
 }
+
+/**
+ * 즉시 발송(optimistic): 기록 + 홈 처리 후 바로 닫고, 실제 전송은 백그라운드로.
+ * 전송이 실패하면 기록을 되돌리고 고객을 다시 홈에 미발송으로 복귀시킨다.
+ */
 async function doConfirmSend(): Promise<void> {
   const item = confirmItem;
   if (!item) return;
-  const text = $<HTMLTextAreaElement>("#confirm-text").value;
-  const btn = $<HTMLButtonElement>("#confirm-send");
-  btn.disabled = true;
-  btn.textContent = "전송 중…";
+  const text = $<HTMLTextAreaElement>("#confirm-text").value.trim();
+  if (!text) { toast("보낼 내용을 입력하세요", { err: true }); return; }
+  $("#confirm-modal").classList.add("hidden");
+  confirmItem = null;
 
-  // Test row: send directly, do NOT record or mark handled (re-sendable).
+  // Test row: fire-and-forget, never recorded (re-sendable).
   if (item.test) {
-    try {
-      await sendSms(item.phone, text);
-      toast("테스트 문자를 보냈습니다");
-    } catch (e) {
-      toast(e instanceof Error ? e.message : "발송 실패", { err: true });
-    }
-    btn.disabled = false;
-    btn.textContent = "보내기";
-    $("#confirm-modal").classList.add("hidden");
-    confirmItem = null;
+    toast("테스트 문자를 보냅니다");
+    void sendSms(item.phone, text).catch((e) =>
+      toast(e instanceof Error ? e.message : "발송 실패", { err: true }),
+    );
     return;
   }
 
-  const res = await sendAlert(item, CFG, { history, sendSms, nowIso }, text);
-  btn.disabled = false;
-  btn.textContent = "보내기";
-  $("#confirm-modal").classList.add("hidden");
-  confirmItem = null;
-  if (res.status === "sent") {
-    markHandled(item);
-    toast("문자를 보냈습니다");
-  } else if (res.status === "already") {
-    markHandled(item);
-    toast("이미 발송된 고객입니다");
-  } else {
-    toast(res.error || "발송 실패", { err: true });
+  // Record-only mode (실제 발송 꺼짐): 기록만, 문자 안 보냄.
+  if (!CFG.deliver_alerts) {
+    const res = await sendAlert(item, CFG, { history, sendSms, nowIso }, text);
+    if (res.status === "sent" || res.status === "already") {
+      markHandled(item);
+      await history.cacheDueList(RESULTS);
+      toast(res.status === "already" ? "이미 발송된 고객입니다" : "기록되었습니다 (실제 발송 꺼짐)");
+    } else {
+      toast(res.error || "실패", { err: true });
+    }
+    return;
   }
+
+  // Deliver ON — 낙관적: 기록 + 홈 처리 즉시, 전송은 백그라운드.
+  const key = `${item.phone}|${item.expiry_date}`;
+  if (sendingKeys.has(key)) { toast("이미 발송 중입니다"); return; } // 중복 발송 방지
+  sendingKeys.add(key);
+  const newly = await history.recordSent(dueItemToEntry(item, text), "sms", nowIso());
+  markHandled(item);
+  await history.cacheDueList(RESULTS);
+  if (!newly) { sendingKeys.delete(key); toast("이미 발송된 고객입니다"); return; }
+  toast("문자를 보냈습니다");
+  void sendSms(item.phone, text).then(
+    () => sendingKeys.delete(key),
+    async () => {
+      // 전송 실패 -> 이 발송이 넣은 기록을 되돌리고, 로그 기준으로 홈/캐시를 재계산해
+      // (캡처한 옛 객체가 아니라) 현재 목록의 해당 고객을 미발송으로 복귀시킨다.
+      sendingKeys.delete(key);
+      await history.remove(item.phone, item.expiry_date);
+      await reconcileSentFlags();
+      await history.cacheDueList(RESULTS);
+      refreshAfterSend();
+      toast(`${item.customer || item.phone} 발송 실패 — 홈으로 되돌렸습니다`, { err: true });
+    },
+  );
 }
 
 /* ---------- scan ---------- */
@@ -1331,11 +1350,11 @@ async function checkUpdate(): Promise<void> {
   }
 }
 
-/** Re-evaluate session + refresh the home banner / scan. */
+/** Re-evaluate session + the home banner. Does NOT auto-scan — scanning is manual
+ *  ("지금 다시 스캔" 버튼). The last scan is restored from cache in boot() instead. */
 async function refreshHome(): Promise<void> {
   const hasSession = await poncleHasSession(CFG).catch(() => false);
   showBanner(hasSession ? "none" : "session");
-  if (hasSession) await doScan();
 }
 
 /**
@@ -1376,6 +1395,11 @@ async function boot(): Promise<void> {
   await loadRecent(); // 조회 최근 검색어
   LAST_SCAN = await history.getLastScan(); // 대시보드/홈 마지막 스캔 표시 복원
   if (LAST_SCAN) $("#last-scan").textContent = LAST_SCAN;
+  // 마지막 스캔 결과를 캐시에서 복원해 홈을 즉시 표시(자동 재스캔 없음). 새로고침은 수동 버튼.
+  // 발송 상태는 캐시가 아니라 실제 이력 기준으로 보정(다른 탭에서 보낸 건 반영).
+  RESULTS = await history.loadDueList();
+  await reconcileSentFlags();
+  renderDueList();
   renderState("idle");
   // Onboarding first-run gates the session check: finishOnb() calls refreshHome()
   // after the login step, so we don't show the login banner over a fresh login.
