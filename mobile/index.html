@@ -73,6 +73,35 @@
     </div>
   </section>
 
+  <!-- ===== DASHBOARD (대시보드) ===== -->
+  <section id="view-dashboard" class="screen hidden">
+    <div class="topbar">
+      <div class="brand"><span>대시보드</span></div>
+    </div>
+    <div class="scroll">
+      <div id="dash-body" class="dash-body"></div>
+    </div>
+  </section>
+
+  <!-- ===== LOOKUP (고객 조회) ===== -->
+  <section id="view-lookup" class="screen hidden">
+    <div class="topbar">
+      <div class="brand"><span>고객 조회</span></div>
+    </div>
+    <div class="scroll">
+      <div class="lk-searchbox">
+        <div class="search">
+          <span class="searchicon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M21 21L16.5 16.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+          <input id="lk-query" placeholder="고객명 또는 전화번호 검색" autocomplete="off" />
+          <button class="lk-clear hidden" id="lk-clear" aria-label="지우기">×</button>
+        </div>
+        <div class="lk-tooshort hidden" id="lk-tooshort">2글자 이상 입력해주세요</div>
+        <button class="btn-scan" id="lk-submit">조회</button>
+      </div>
+      <div id="lk-body" class="lk-body"></div>
+    </div>
+  </section>
+
   <!-- ===== HISTORY ===== -->
   <section id="view-history" class="screen hidden">
     <div class="topbar topbar-sub">
@@ -291,6 +320,14 @@
     <button class="navbtn active" id="nav-home" data-nav="home">
       <svg width="21" height="21" viewBox="0 0 24 24" fill="none"><path d="M4 11L12 4L20 11" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 9.5V20H18V9.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       <span>홈</span>
+    </button>
+    <button class="navbtn" id="nav-dashboard" data-nav="dashboard">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none"><rect x="4" y="12" width="4" height="8" rx="1" stroke="currentColor" stroke-width="2"/><rect x="10" y="7" width="4" height="13" rx="1" stroke="currentColor" stroke-width="2"/><rect x="16" y="4" width="4" height="16" rx="1" stroke="currentColor" stroke-width="2"/></svg>
+      <span>대시보드</span>
+    </button>
+    <button class="navbtn" id="nav-lookup" data-nav="lookup">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none"><circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor" stroke-width="2"/><path d="M20 20L15 15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <span>조회</span>
     </button>
     <button class="navbtn" id="nav-history" data-nav="history">
       <svg width="21" height="21" viewBox="0 0 24 24" fill="none"><rect x="4" y="5" width="16" height="15" rx="2" stroke="currentColor" stroke-width="2"/><path d="M8 3V7M16 3V7M4 10H20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>

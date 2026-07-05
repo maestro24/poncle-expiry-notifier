@@ -9,6 +9,7 @@
  * without touching callers.
  */
 import { Preferences } from "@capacitor/preferences";
+import type { CohortEntry } from "./cohort";
 import type { DueItem } from "./types";
 
 export interface SentRecord {
@@ -43,6 +44,24 @@ const HANDLED_KEY = "unvisited_handled";
 const CACHE_KEY = "unvisited_cache";
 /** One-shot guard so the v1.1.x 연락완료 -> handled migration runs only once. */
 const MIGRATED_KEY = "unvisited_handled_migrated";
+/** Last scan's due list, so the 대시보드 shows counts/임박/통신사 without re-scanning. */
+const DUELIST_KEY = "due_cache";
+/** ISO datetime of the last data backup, for the 대시보드 backup reminder. */
+const BACKUP_KEY = "last_backup_at";
+/** Display timestamp of the last scan (survives app restart for the 대시보드). */
+const LASTSCAN_KEY = "last_scan_at";
+/** 재방문 전환율 cohort log (expired customers + informed/revisited flags). */
+const COHORT_KEY = "cohort_log";
+
+function parseJsonArray<T>(raw: string | null): T[] {
+  if (!raw) return [];
+  try {
+    const a = JSON.parse(raw);
+    return Array.isArray(a) ? (a as T[]) : [];
+  } catch {
+    return [];
+  }
+}
 
 // Dedup identifies a customer's contract by phone + expiry date. Offset (days
 // until expiry) is deliberately NOT part of the key: in the range scan model it
@@ -150,14 +169,55 @@ export class History {
 
   /** Read the cached 미방문 list from the last scan (empty until first scan). */
   async loadUnvisited(): Promise<DueItem[]> {
-    const raw = await this.kv.get(CACHE_KEY);
-    if (!raw) return [];
-    try {
-      const arr = JSON.parse(raw);
-      return Array.isArray(arr) ? (arr as DueItem[]) : [];
-    } catch {
-      return [];
-    }
+    return parseJsonArray<DueItem>(await this.kv.get(CACHE_KEY));
+  }
+
+  /** Cache the last scan's due list (for the 대시보드 counts). Serialized. */
+  async cacheDueList(rows: DueItem[]): Promise<void> {
+    const task = this.lock.then(() =>
+      this.kv.set(DUELIST_KEY, JSON.stringify(Array.isArray(rows) ? rows : [])),
+    );
+    this.lock = task.then(() => undefined, () => undefined);
+    return task;
+  }
+
+  /** Read the cached due list from the last scan (empty until first scan). */
+  async loadDueList(): Promise<DueItem[]> {
+    return parseJsonArray<DueItem>(await this.kv.get(DUELIST_KEY));
+  }
+
+  /** Record when the user last exported/backed up (ISO datetime). */
+  async setLastBackup(nowIso: string): Promise<void> {
+    await this.kv.set(BACKUP_KEY, nowIso);
+  }
+
+  /** ISO datetime of the last backup, "" if never. */
+  async getLastBackup(): Promise<string> {
+    return (await this.kv.get(BACKUP_KEY)) ?? "";
+  }
+
+  /** Persist the last scan's display timestamp (so the 대시보드 survives restart). */
+  async setLastScan(label: string): Promise<void> {
+    await this.kv.set(LASTSCAN_KEY, label);
+  }
+
+  /** Last scan's display timestamp, "" if never scanned. */
+  async getLastScan(): Promise<string> {
+    return (await this.kv.get(LASTSCAN_KEY)) ?? "";
+  }
+
+  /** Read the 재방문 전환율 cohort log. */
+  async loadCohort(): Promise<CohortEntry[]> {
+    return parseJsonArray<CohortEntry>(await this.kv.get(COHORT_KEY));
+  }
+
+  /** Persist the cohort log (full overwrite). Serialized. */
+  async saveCohort(entries: CohortEntry[]): Promise<void> {
+    const task = this.lock.then(() =>
+      this.kv.set(COHORT_KEY, JSON.stringify(Array.isArray(entries) ? entries : [])),
+    );
+    this.lock = task.then(() => undefined, () => undefined);
+    return task;
   }
 
   /**

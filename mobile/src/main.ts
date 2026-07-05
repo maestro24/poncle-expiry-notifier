@@ -8,6 +8,11 @@ import { DEFAULTS, loadConfig, saveConfig } from "./domain/config";
 import { isStandardOpenType, normalizeAgency, resolveTermMonths } from "./domain/expiry";
 import { buildBackup, historyToCsv, parseBackup } from "./domain/export";
 import { History, preferencesKV } from "./domain/history";
+import { cohortStats, COHORT_WINDOW_DAYS } from "./domain/cohort";
+import { carrierBreakdown, sentTrend } from "./domain/dashboard";
+import { buildLookupResults, lookupToDueItem, type LookupResult } from "./domain/lookup";
+import { PoncleClient, SessionExpired } from "./domain/poncle-client";
+import { today } from "./domain/plaindate";
 import { runScan, type ScanState } from "./domain/scan";
 import { renderTemplate, sendAlert } from "./domain/sender";
 import { conditionSummary, matchingTemplates } from "./domain/template-match";
@@ -38,6 +43,15 @@ let DUE_QUERY = "";
 let DUE_FILTER: "all" | "unsent" = "all";
 let HIST_TAB: "sent" | "unvisited" = "sent";
 let UNV_SHOW_EXCLUDED = false; // 미방문 탭: 수동 제외한 고객도 함께 볼지
+
+/* 고객 조회(lookup) 상태 */
+type LookupState = "initial" | "loading" | "results" | "empty" | "err-session" | "err-network";
+let LK_STATE: LookupState = "initial";
+let LK_RESULTS: LookupResult[] = [];
+let LK_RECENT: string[] = [];
+let LK_LAST_QUERY = "";
+const LK_RECENT_KEY = "lookup_recent";
+const LOOKUP_SOON_DAYS = 30; // "곧 만료"로 볼 임계(조회 화면 전용)
 
 const AGENCIES = [
   "CD대리점", "DMB 엘지", "M&S분당도매센터", "MCC - 스테이지파이브SK", "MCC- SK텔링크",
@@ -93,11 +107,11 @@ function toast(msg: string, opts: { err?: boolean; undo?: () => void } = {}): vo
 }
 
 /* ---------- navigation ---------- */
-type Screen = "home" | "history" | "settings" | "terms" | "templates" | "template-edit";
+type Screen = "home" | "dashboard" | "lookup" | "history" | "settings" | "terms" | "templates" | "template-edit";
 // terms/templates/template-edit are sub-screens of 설정: the bottom-nav keeps
 // 설정 highlighted while they're open.
 const SETTINGS_FAMILY: Screen[] = ["settings", "terms", "templates", "template-edit"];
-const ALL_SCREENS: Screen[] = ["home", "history", "settings", "terms", "templates", "template-edit"];
+const ALL_SCREENS: Screen[] = ["home", "dashboard", "lookup", "history", "settings", "terms", "templates", "template-edit"];
 let CURRENT: Screen = "home";
 function showScreen(name: Screen): void {
   // Leaving a screen with editable inputs: commit pending edits (auto-save net).
@@ -108,6 +122,8 @@ function showScreen(name: Screen): void {
   const navName = SETTINGS_FAMILY.includes(name) ? "settings" : name;
   $$(".navbtn").forEach((b) => b.classList.toggle("active", b.dataset.nav === navName));
   if (name === "history") void loadHistory();
+  if (name === "dashboard") void renderDashboard();
+  if (name === "lookup") openLookup();
   if (name === "settings") { populateSettings(); void refreshSessionState(); void refreshCredsState(); }
   if (name === "terms") populateTerms();
   if (name === "templates") renderTemplateList();
@@ -235,6 +251,7 @@ function actionEl(item: DueItem): HTMLElement {
 function markHandled(item: DueItem): void {
   item.already_sent = true;
   if (CURRENT === "history") void loadHistory(); // 미방문 탭에서 보낸 경우: 안내함으로 갱신
+  else if (CURRENT === "lookup") void refreshLookupInformed(); // 조회에서 보낸 경우
   else renderDueList();
 }
 
@@ -360,6 +377,7 @@ async function doScan(): Promise<void> {
     const res = await runScan(nativePoncleGateway(CFG), CFG, history);
     LAST_SCAN = nowShort();
     $("#last-scan").textContent = LAST_SCAN;
+    void history.setLastScan(LAST_SCAN); // 대시보드가 재시작 후에도 표시하도록 영속화
     if (res.status === "session_expired") {
       showBanner("session");
       renderState("session_expired");
@@ -373,6 +391,7 @@ async function doScan(): Promise<void> {
     }
     showBanner("none");
     RESULTS = res.results;
+    await history.cacheDueList(res.results); // 대시보드 3숫자/임박/통신사 캐시
     // 미결 조회가 저하(빈 블랙리스트)된 스캔이면 미방문 캐시를 덮어쓰지 않는다 —
     // 그대로 두면 이전 정상 스캔 결과가 유지된다. 정상 스캔에서만 갱신.
     if (!res.pendingDegraded) await history.cacheUnvisited(res.unvisited);
@@ -542,6 +561,298 @@ async function unexcludeUnvisited(r: DueItem): Promise<void> {
   await history.setHandled(r.phone, r.expiry_date, false);
   await loadHistory();
   toast("제외를 해제했습니다");
+}
+
+/* ---------- dashboard (대시보드) ---------- */
+async function renderDashboard(): Promise<void> {
+  const body = $("#dash-body");
+  const todayD = today();
+  const todayIso = todayIsoLocal();
+
+  const due = await history.loadDueList();
+  const targets = due.length;
+  const unsent = due.filter((r) => !r.already_sent).length;
+  const cachedUnv = await history.loadUnvisited();
+  const excluded = await history.handledKeys();
+  const unvisitedCount = cachedUnv.filter((r) => !excluded.has(r.id)).length;
+
+  const soon = due
+    .map((r) => ({ r, dd: -daysSince(r.expiry_date, todayIso) })) // days until expiry
+    .filter((x) => x.dd >= 0 && x.dd <= 3)
+    .sort((a, b) => a.dd - b.dd)
+    .slice(0, 6);
+
+  const trend = sentTrend(await history.exportAll(), todayD, 7);
+  const trendMax = Math.max(1, ...trend.map((d) => d.count));
+  const carriers = carrierBreakdown(due);
+  const carrierMax = Math.max(1, ...carriers.map((c) => c.count));
+  const cohort = cohortStats(await history.loadCohort(), todayD, COHORT_WINDOW_DAYS);
+
+  const lastBackup = await history.getLastBackup();
+  const backupDays = lastBackup ? Math.max(0, daysSince(lastBackup.slice(0, 10), todayIso)) : null;
+  const showBackup = backupDays === null || backupDays >= 14;
+
+  const bar = (pctH: number) => `height:${Math.max(0, Math.min(100, pctH))}%`;
+
+  body.innerHTML = `
+    <div class="dash-today">
+      <div class="dash-today-title">오늘의 할 일</div>
+      <div class="dash-today-nums">
+        <div><div class="dt-num">${targets}</div><div class="dt-lbl">만료 예정</div></div>
+        <div><div class="dt-num dt-warn">${unsent}</div><div class="dt-lbl">미발송 대기</div></div>
+        <div><div class="dt-num dt-danger">${unvisitedCount}</div><div class="dt-lbl">미방문</div></div>
+      </div>
+      <div class="dash-today-foot">
+        <span>마지막 스캔 <b>${esc(LAST_SCAN || "없음")}</b></span>
+        <button class="dt-scan" id="dash-scan">지금 스캔</button>
+      </div>
+    </div>
+    ${showBackup ? `
+    <div class="banner banner-warn">
+      <div class="banner-icon">${LK_WARN_ICON}</div>
+      <div class="banner-txt">
+        <div class="banner-title">${backupDays === null ? "데이터 백업을 한 적이 없습니다" : `데이터 백업이 ${backupDays}일 전입니다`}</div>
+        <div class="banner-sub">이력·중복방지 기록은 폰에만 저장돼요. 설정에서 백업하세요.</div>
+      </div>
+      <button class="banner-btn" id="dash-backup-go">백업</button>
+    </div>` : ""}
+    <div class="dash-card">
+      <div class="dash-h">임박 고객</div>
+      <div class="dash-sub">D-3 이내 만료 대상</div>
+      ${soon.length ? soon.map((x) => `
+        <div class="dash-soon">
+          <div class="ds-info"><div class="ds-name">${esc(x.r.customer) || "-"}</div><div class="ds-phone">${esc(x.r.phone)}</div></div>
+          <span class="lc-dday ${x.dd === 0 ? "urgent" : ""}">${x.dd === 0 ? "D-day" : "D-" + x.dd}</span>
+        </div>`).join("") : `<div class="dash-empty">임박 대상이 없습니다</div>`}
+    </div>
+    <div class="dash-card">
+      <div class="dash-h">발송 추세</div>
+      <div class="dash-sub">최근 7일 일별 발송 건수</div>
+      <div class="dash-bars">
+        ${trend.map((d) => `
+          <div class="db-col">
+            <div class="db-val">${d.count}</div>
+            <div class="db-bartrack"><div class="db-bar" style="${bar((d.count / trendMax) * 100)}"></div></div>
+            <div class="db-day">${esc(d.dayLabel)}</div>
+          </div>`).join("")}
+      </div>
+    </div>
+    <div class="dash-card">
+      <div class="dash-h">통신사별 분포</div>
+      <div class="dash-sub">이번 만료 대상 기준</div>
+      ${carriers.length && targets ? carriers.map((c) => `
+        <div class="dash-crow">
+          <div class="dc-top"><span>${esc(c.name)}</span><span class="dc-cnt">${c.count}명</span></div>
+          <div class="dc-track"><div class="dc-fill" style="width:${Math.round((c.count / carrierMax) * 100)}%"></div></div>
+        </div>`).join("") : `<div class="dash-empty">스캔 결과가 없습니다</div>`}
+    </div>
+    <div class="dash-card">
+      <div class="dash-h">재방문 전환율</div>
+      ${cohort.total === 0 ? `
+        <div class="dash-sub">최근 ${COHORT_WINDOW_DAYS}일 만료 고객 재방문 현황</div>
+        <div class="dash-empty">아직 집계할 만료 고객이 없습니다.<br/>스캔을 계속하면 데이터가 쌓입니다.</div>
+      ` : `
+        <div class="dash-sub">최근 ${COHORT_WINDOW_DAYS}일 만료 ${cohort.total}명 중 재방문 현황</div>
+        <div class="dash-rate"><span class="dr-big">${cohort.revisitRate}%</span><span class="dr-cap">${cohort.revisited}명 재방문</span></div>
+        <div class="dash-div"></div>
+        <div class="dash-sub2">안내 발송 여부별 재방문율</div>
+        <div class="dash-crow">
+          <div class="dc-top"><span>안내 발송함 (${cohort.informed}명)</span><span class="dc-pct-ok">${cohort.informedRate}%</span></div>
+          <div class="dc-track"><div class="dc-fill dc-green" style="width:${cohort.informedRate}%"></div></div>
+        </div>
+        <div class="dash-crow">
+          <div class="dc-top"><span>안내 미발송 (${cohort.uninformed}명)</span><span class="dc-pct-mut">${cohort.uninformedRate}%</span></div>
+          <div class="dc-track"><div class="dc-fill dc-grey" style="width:${cohort.uninformedRate}%"></div></div>
+        </div>
+      `}
+    </div>`;
+
+  $("#dash-scan").onclick = () => void dashScan();
+  const backupGo = document.querySelector("#dash-backup-go") as HTMLElement | null;
+  if (backupGo) backupGo.onclick = () => showScreen("settings");
+}
+
+async function dashScan(): Promise<void> {
+  const btn = $<HTMLButtonElement>("#dash-scan");
+  btn.disabled = true;
+  btn.textContent = "스캔 중…";
+  try {
+    await doScan();
+  } finally {
+    if (CURRENT === "dashboard") void renderDashboard();
+  }
+}
+
+/* ---------- lookup (고객 조회) ---------- */
+const LK_WARN_ICON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2.5L1.5 21h21L12 2.5z" stroke="white" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 9V13" stroke="white" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="16.5" r="1" fill="white"/></svg>`;
+const LK_ERR_ICON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9.5" stroke="white" stroke-width="1.8"/><path d="M12 8V13" stroke="white" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="16.5" r="1" fill="white"/></svg>`;
+const LK_CALL_ICON = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M5 4H9L11 9L8.5 10.5C9.5 12.7 11.3 14.5 13.5 15.5L15 13L20 15V19C20 20.1 19.1 21 18 21C10.3 20.5 3.5 13.7 3 6C3 4.9 3.9 4 5 4Z" stroke="#1e7a37" stroke-width="1.8" stroke-linejoin="round"/></svg>`;
+const LK_COPY_ICON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="8" y="8" width="12" height="12" rx="2" stroke="#4b4d51" stroke-width="1.8"/><path d="M16 8V6C16 4.9 15.1 4 14 4H6C4.9 4 4 4.9 4 6V14C4 15.1 4.9 16 6 16H8" stroke="#4b4d51" stroke-width="1.8"/></svg>`;
+
+/** Entry when the 조회 tab opens: reflect current state + input chrome. */
+function openLookup(): void {
+  updateLookupInputChrome($<HTMLInputElement>("#lk-query").value);
+  renderLookup();
+}
+
+function updateLookupInputChrome(value: string): void {
+  const q = value.trim();
+  $("#lk-clear").classList.toggle("hidden", value.length === 0);
+  $("#lk-tooshort").classList.toggle("hidden", !(q.length > 0 && q.length < 2));
+}
+
+/** phone|expiry -> latest sent_at, for the 안내 이력 join (skips 'skipped'). */
+async function lookupSentIndex(): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  for (const r of await history.exportAll()) {
+    if (r.channel === "skipped") continue;
+    const key = `${r.phone}|${r.expiry_date}`;
+    const prev = map.get(key);
+    if (!prev || r.sent_at > prev) map.set(key, r.sent_at);
+  }
+  return map;
+}
+
+async function submitLookup(): Promise<void> {
+  const q = $<HTMLInputElement>("#lk-query").value.trim();
+  updateLookupInputChrome(q);
+  if (q.length < 2) return;
+  LK_STATE = "loading";
+  renderLookup();
+  try {
+    const client = new PoncleClient(nativePoncleGateway(CFG), CFG);
+    const rows = await client.searchCustomers(q);
+    const sent = await lookupSentIndex();
+    LK_RESULTS = buildLookupResults(rows, CFG, today(), LOOKUP_SOON_DAYS, sent);
+    LK_LAST_QUERY = q;
+    LK_STATE = LK_RESULTS.length ? "results" : "empty";
+    pushRecent(q);
+  } catch (e) {
+    LK_STATE = e instanceof SessionExpired ? "err-session" : "err-network";
+  }
+  renderLookup();
+}
+
+function pushRecent(q: string): void {
+  LK_RECENT = [q, ...LK_RECENT.filter((r) => r !== q)].slice(0, 6);
+  void Preferences.set({ key: LK_RECENT_KEY, value: JSON.stringify(LK_RECENT) });
+}
+
+async function loadRecent(): Promise<void> {
+  const { value } = await Preferences.get({ key: LK_RECENT_KEY });
+  if (!value) return;
+  try {
+    const a = JSON.parse(value);
+    if (Array.isArray(a)) LK_RECENT = a.filter((x) => typeof x === "string").slice(0, 6);
+  } catch {
+    /* ignore corrupt recent list */
+  }
+}
+
+function clearLookup(): void {
+  $<HTMLInputElement>("#lk-query").value = "";
+  LK_STATE = "initial";
+  LK_RESULTS = [];
+  updateLookupInputChrome("");
+  renderLookup();
+}
+
+/** After a send from the 조회 tab: refresh the 안내 이력 badge from the sent log. */
+async function refreshLookupInformed(): Promise<void> {
+  const sent = await lookupSentIndex();
+  LK_RESULTS = LK_RESULTS.map((r) => ({ ...r, informedAt: sent.get(r.id) ?? r.informedAt }));
+  if (LK_STATE === "results") renderLookupResults();
+}
+
+function renderLookup(): void {
+  const body = $("#lk-body");
+  if (LK_STATE === "loading") {
+    body.innerHTML = `<div class="lk-center"><div class="spinner"></div><div class="lk-note">조회 중…</div></div>`;
+    return;
+  }
+  if (LK_STATE === "err-session") {
+    body.innerHTML = `<div class="banner banner-warn"><div class="banner-icon">${LK_WARN_ICON}</div><div class="banner-txt"><div class="banner-title">폰클 세션이 만료되었습니다</div><div class="banner-sub">재로그인 후 다시 조회하세요</div></div><button class="banner-btn" id="lk-login">로그인</button></div>`;
+    $("#lk-login").onclick = () => void doLogin();
+    return;
+  }
+  if (LK_STATE === "err-network") {
+    body.innerHTML = `<div class="banner banner-error"><div class="banner-icon">${LK_ERR_ICON}</div><div class="banner-txt"><div class="banner-title">네트워크 오류가 발생했습니다</div><div class="banner-sub">잠시 후 다시 시도하세요</div></div><button class="banner-btn banner-btn-red" id="lk-retry">재시도</button></div>`;
+    $("#lk-retry").onclick = () => void submitLookup();
+    return;
+  }
+  if (LK_STATE === "empty") {
+    body.innerHTML = `<div class="lk-center lk-empty">‘${esc(LK_LAST_QUERY)}’ 일치하는 고객이 없습니다</div>`;
+    return;
+  }
+  if (LK_STATE === "results") {
+    renderLookupResults();
+    return;
+  }
+  const chips = LK_RECENT.length
+    ? `<div class="lk-recent-label">최근 조회</div><div class="lk-recent">${LK_RECENT.map((q) => `<button class="lk-chip" data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>`
+    : "";
+  body.innerHTML = `${chips}<div class="lk-center lk-initial"><svg width="34" height="34" viewBox="0 0 24 24" fill="none"><circle cx="10.5" cy="10.5" r="6.5" stroke="#d7d9db" stroke-width="2"/><path d="M20 20L15 15" stroke="#d7d9db" stroke-width="2" stroke-linecap="round"/></svg><div>고객명 또는 전화번호를 검색해<br/>현재 약정 상태를 바로 확인하세요</div></div>`;
+  for (const b of $$("#lk-body .lk-chip")) {
+    b.onclick = () => {
+      const q = b.dataset.q ?? "";
+      $<HTMLInputElement>("#lk-query").value = q;
+      updateLookupInputChrome(q);
+      void submitLookup();
+    };
+  }
+}
+
+function renderLookupResults(): void {
+  const body = $("#lk-body");
+  body.innerHTML = `<div class="lk-count">${LK_RESULTS.length}명 검색됨</div>` + LK_RESULTS.map(lookupCardHtml).join("");
+  for (const el of $$("#lk-body .lk-card")) {
+    const r = LK_RESULTS.find((x) => x.id === el.dataset.id);
+    if (!r) continue;
+    const send = el.querySelector(".lk-send") as HTMLElement | null;
+    if (send) send.onclick = () => void onLookupSend(r);
+    (el.querySelector(".lk-copy") as HTMLElement).onclick = () => void onLookupCopy(r);
+  }
+}
+
+function lookupCardHtml(r: LookupResult): string {
+  const digits = String(r.phone).replace(/[^0-9+]/g, "");
+  const informed = r.informedAt
+    ? `<span class="lk-inf-yes">안내함 · ${esc(r.informedAt.slice(0, 10))} 발송</span>`
+    : `<span class="lk-inf-no">안내 내역 없음</span>`;
+  return `
+    <div class="lk-card" data-id="${esc(r.id)}">
+      <div class="lk-card-top">
+        <span class="lk-name">${esc(r.customer) || "-"}</span>
+        <span class="lk-status tone-${r.status.tone}">${esc(r.status.label)}</span>
+      </div>
+      <div class="lk-phone">${esc(r.phone)}</div>
+      <div class="lk-grid">
+        <div><div class="lk-k">개통일</div><div class="lk-v">${esc(r.opendate) || "-"}</div></div>
+        <div><div class="lk-k">만료일</div><div class="lk-v">${esc(r.expiry_date) || "무약정"}</div></div>
+        <div><div class="lk-k">통신사 · 거래처</div><div class="lk-v">${esc(r.telecom) || "-"} · ${esc(r.agency) || "-"}</div></div>
+        <div><div class="lk-k">모델 · 요금제</div><div class="lk-v">${esc(r.model) || "-"} · ${esc(r.plan) || "-"}</div></div>
+        <div><div class="lk-k">담당</div><div class="lk-v">${esc(r.staff) || "-"}</div></div>
+        <div><div class="lk-k">안내 이력</div><div class="lk-v">${informed}</div></div>
+      </div>
+      <div class="lk-actions">
+        ${r.expiry_date ? `<button class="lk-send btn-send">알림 보내기</button>` : ""}
+        <a class="lk-call" href="tel:${esc(digits)}" aria-label="통화">${LK_CALL_ICON}</a>
+        <button class="lk-copy" aria-label="번호 복사">${LK_COPY_ICON}</button>
+      </div>
+    </div>`;
+}
+
+async function onLookupSend(r: LookupResult): Promise<void> {
+  await onSend(lookupToDueItem(r), document.createElement("button"));
+}
+
+async function onLookupCopy(r: LookupResult): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(r.phone);
+    toast("번호가 복사되었습니다");
+  } catch {
+    toast("복사에 실패했습니다", { err: true });
+  }
 }
 
 /* ---------- settings ---------- */
@@ -765,6 +1076,7 @@ async function exportCsv(): Promise<void> {
 async function exportBackup(): Promise<void> {
   const backup = buildBackup(CFG, await history.exportAll(), nowIso());
   await shareText("약정만료 알리미 백업", JSON.stringify(backup));
+  await history.setLastBackup(nowIso()); // 대시보드 백업 리마인더 기준
 }
 async function doRestore(): Promise<void> {
   const text = $<HTMLTextAreaElement>("#restore-text").value.trim();
@@ -909,6 +1221,12 @@ function bind(): void {
     void loadHistory();
   });
 
+  // 고객 조회 탭
+  $("#lk-query").addEventListener("input", (e) => updateLookupInputChrome((e.target as HTMLInputElement).value));
+  $("#lk-query").addEventListener("keydown", (e) => { if ((e as KeyboardEvent).key === "Enter") void submitLookup(); });
+  $("#lk-submit").onclick = () => void submitLookup();
+  $("#lk-clear").onclick = () => clearLookup();
+
   // Settings
   $("#s-deliver").onclick = async () => {
     const el = $("#s-deliver");
@@ -1015,6 +1333,9 @@ async function boot(): Promise<void> {
   bind();
   CFG = await loadConfig();
   await history.migrateRecontacted(); // v1.1.x 연락완료 -> 제외(handled), one-time
+  await loadRecent(); // 조회 최근 검색어
+  LAST_SCAN = await history.getLastScan(); // 대시보드/홈 마지막 스캔 표시 복원
+  if (LAST_SCAN) $("#last-scan").textContent = LAST_SCAN;
   renderState("idle");
   // Onboarding first-run gates the session check: finishOnb() calls refreshHome()
   // after the login step, so we don't show the login banner over a fresh login.

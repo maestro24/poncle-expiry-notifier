@@ -154,6 +154,20 @@ export class PoncleClient {
     return pool[0] ?? null;
   }
 
+  /** Live customer search by name or phone for the 고객 조회 screen. The server
+   *  filters on `s=customer-openphone`, so one query matches both. Returns every
+   *  matching open row (a phone may have several 개통 over time); the caller groups
+   *  by phone. Throws SessionExpired / NetworkError like the scan fetches. */
+  async searchCustomers(query: string): Promise<PoncleRow[]> {
+    const q = query.trim();
+    if (q.length < 2) return [];
+    const scale = Math.max(1, int(this.config.page_size, 100));
+    const params = baseParams(0, scale);
+    params.q = q;
+    const res = await this.get(params);
+    return res.list;
+  }
+
   /** Fetch every row whose opendate falls in [sdate, edate] via the server filter. */
   private async fetchByDateRange(sdate: string, edate: string): Promise<PoncleRow[]> {
     const scale = Math.max(1, int(this.config.page_size, 100));

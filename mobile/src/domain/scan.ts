@@ -4,6 +4,7 @@
  * (per the configured milestones) and flags which were already alerted. Sending
  * is a separate, explicit per-row action (sender.ts).
  */
+import { COHORT_WINDOW_DAYS, updateCohort } from "./cohort";
 import { entryFromRow } from "./due-item";
 import { dueWithin, scanOpenDateBounds } from "./expiry";
 import type { History } from "./history";
@@ -140,6 +141,19 @@ export async function runScan(
 
   // 미방문 고객: expired-but-not-returned, derived from the same widened fetch.
   const unvisited = computeUnvisited(openRows, pendingRows, cfg, todayD, blacklist, sentKeys);
+
+  // 재방문 전환율 코호트 갱신 (auxiliary; a degraded 미결 fetch gives an empty
+  // blacklist so the expired set is unreliable → skip. Never fail a scan over it).
+  if (!pendingDegraded) {
+    try {
+      const prevCohort = await history.loadCohort();
+      await history.saveCohort(
+        updateCohort(prevCohort, unvisited, openRows, sentKeys, todayD, COHORT_WINDOW_DAYS),
+      );
+    } catch {
+      /* ignore cohort persistence errors */
+    }
+  }
 
   const sent = results.filter((r) => r.already_sent).length;
   return {
