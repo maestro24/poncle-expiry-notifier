@@ -11,6 +11,7 @@ import { History, preferencesKV } from "./domain/history";
 import { cohortStats, COHORT_WINDOW_DAYS } from "./domain/cohort";
 import { carrierBreakdown, sentTrend } from "./domain/dashboard";
 import { buildLookupResults, lookupToDueItem, type LookupResult } from "./domain/lookup";
+import { cleanPlan } from "./domain/plan";
 import { PoncleClient, SessionExpired } from "./domain/poncle-client";
 import { today } from "./domain/plaindate";
 import { runScan, type ScanState } from "./domain/scan";
@@ -178,6 +179,13 @@ function renderDueList(): void {
   for (const item of rows) list.appendChild(dueCard(item));
   renderCards();
 }
+/** A "요금제 …" meta line (with a leading <br>), empty when the plan is blank.
+ *  Shared by the home due list and the 이력 cards. Light display cleanup only. */
+function planLine(plan: string): string {
+  const p = cleanPlan(plan);
+  return p ? `<br>요금제 ${esc(p)}` : "";
+}
+
 function dueCard(item: DueItem): HTMLElement {
   const card = document.createElement("div");
   card.className = "listcard" + (item.already_sent ? " sent" : "");
@@ -191,7 +199,7 @@ function dueCard(item: DueItem): HTMLElement {
         <span class="lc-dday">${dn}</span>
       </div>
       <div class="lc-meta">개통 ${esc(item.opendate)} · 만료 ${esc(item.expiry_date)}<br>
-        ${esc(item.agency)} · ${esc(item.telecom)} · ${esc(item.model)}</div>
+        ${esc(item.agency)} · ${esc(item.telecom)} · ${esc(item.model)}${planLine(item.plan)}</div>
     </div>
     <div class="lc-why hidden"></div>
     <div class="lc-act"></div>`;
@@ -474,7 +482,7 @@ async function renderSentHistory(): Promise<void> {
         <span class="lc-phone">${esc(r.phone)}</span>
         <span class="lc-tag ${tagCls}">${tagTxt}</span></div>
       <div class="lc-meta">개통 ${esc(r.opendate)} · 만료 ${esc(r.expiry_date)} · 처리 ${esc(r.sent_at.replace("T", " ").slice(0, 16))}<br>
-        ${esc(r.agency)} · ${esc(r.telecom)} · ${esc(r.model)}</div>
+        ${esc(r.agency)} · ${esc(r.telecom)} · ${esc(r.model)}${planLine(r.plan)}</div>
       ${r.body ? `<div class="lc-why">${esc(r.body)}</div>` : ""}`;
     list.appendChild(el);
   }
@@ -833,9 +841,10 @@ function lookupCardHtml(r: LookupResult): string {
         <div><div class="lk-k">개통일</div><div class="lk-v">${esc(r.opendate) || "-"}</div></div>
         <div><div class="lk-k">만료일</div><div class="lk-v">${esc(r.expiry_date) || "무약정"}</div></div>
         <div><div class="lk-k">통신사 · 거래처</div><div class="lk-v">${esc(r.telecom) || "-"} · ${esc(r.agency) || "-"}</div></div>
-        <div><div class="lk-k">모델 · 요금제</div><div class="lk-v">${esc(r.model) || "-"} · ${esc(r.plan) || "-"}</div></div>
+        <div><div class="lk-k">모델</div><div class="lk-v">${esc(r.model) || "-"}</div></div>
         <div><div class="lk-k">담당</div><div class="lk-v">${esc(r.staff) || "-"}</div></div>
         <div><div class="lk-k">안내 이력</div><div class="lk-v">${informed}</div></div>
+        <div class="lk-full"><div class="lk-k">요금제</div><div class="lk-v">${esc(cleanPlan(r.plan)) || "-"}</div></div>
       </div>
       <div class="lk-actions">
         ${r.expiry_date ? `<button class="lk-send btn-send">알림 보내기</button>` : ""}
@@ -1167,7 +1176,7 @@ function addTestTarget(): void {
     id: `test:${now.getTime()}`,
     phone: "010-1234-5678", customer: "홍길동(테스트)", opendate: yy, expiry_date: iso,
     milestone_offset: 0, telecom: "SK텔레콤", agency: "테스트대리점", openhow: "번호이동",
-    plan: "", model: "테스트모델", staff: "", already_sent: false, test: true,
+    plan: "5G 프리미어 에센셜 55000", model: "테스트모델", staff: "", already_sent: false, test: true,
   }]);
   showScreen("home");
   renderDueList();
