@@ -6,7 +6,7 @@ import { Preferences } from "@capacitor/preferences";
 import { Share } from "@capacitor/share";
 import { DEFAULTS, loadConfig, saveConfig, seedDefaultTemplates } from "./domain/config";
 import { buildBackup, historyToCsv, parseBackup } from "./domain/export";
-import { History, preferencesKV } from "./domain/history";
+import { History, preferencesKV, type SentRecord } from "./domain/history";
 import { cohortStats, COHORT_WINDOW_DAYS } from "./domain/cohort";
 import { carrierBreakdown, sentTrend } from "./domain/dashboard";
 import { buildLookupResults, lookupToDueItem, type LookupResult } from "./domain/lookup";
@@ -14,7 +14,7 @@ import { cleanPlan } from "./domain/plan";
 import { PoncleClient, SessionExpired } from "./domain/poncle-client";
 import { today } from "./domain/plaindate";
 import { runScan, type ScanState } from "./domain/scan";
-import { dueItemToEntry, renderTemplate, sendAlert } from "./domain/sender";
+import { dueItemToEntry, renderTemplate } from "./domain/sender";
 import { conditionSummary, matchingTemplates } from "./domain/template-match";
 import { checkForUpdate } from "./domain/updater";
 import { MILESTONE_SOURCES, STATUSES, TELECOMS, type AppConfig, type DueItem, type MessageTemplate, type MilestoneSource, type StatusCode, type TelecomCode } from "./domain/types";
@@ -209,18 +209,31 @@ function whyText(item: DueItem): string {
   return `약정 만료 시점 (2단계) · 약정 만료 템플릿\n약정 만료 ${item.expiry_date} · ${dn}\n개통 ${item.opendate}`;
 }
 function actionEl(item: DueItem): HTMLElement {
-  if (item.already_sent) {
-    const b = document.createElement("span");
-    b.className = "sent-badge" + (CFG.deliver_alerts ? "" : " rec");
-    b.textContent = CFG.deliver_alerts ? "✓ 발송됨" : "✓ 기록됨(미발송)";
-    return b;
-  }
   const row = document.createElement("div");
   row.className = "lc-actions";
+  if (item.already_sent) {
+    // 이미 발송/기록된 고객: 상태 배지 + 재발송(기존 안내 이력 업데이트) + 통화.
+    const badge = document.createElement("span");
+    badge.className = "sent-badge" + (CFG.deliver_alerts ? "" : " rec");
+    badge.textContent = CFG.deliver_alerts ? "✓ 발송됨" : "✓ 기록됨(미발송)";
+    const resend = document.createElement("button");
+    resend.className = "btn-send resend";
+    resend.textContent = "재발송";
+    resend.title = "다시 보내고 기존 안내 이력을 갱신합니다";
+    resend.onclick = () => onSend(item, resend);
+    const call = document.createElement("button");
+    call.className = "btn-call";
+    call.textContent = "통화";
+    call.onclick = () => void onCall(item);
+    row.appendChild(badge);
+    row.appendChild(resend);
+    row.appendChild(call);
+    return row;
+  }
   const send = document.createElement("button");
   send.className = "btn-send";
   send.textContent = "알림 보내기";
-  send.onclick = () => void onSend(item, send);
+  send.onclick = () => onSend(item, send);
   const call = document.createElement("button");
   call.className = "btn-call";
   call.textContent = "통화";
@@ -333,39 +346,56 @@ async function doConfirmSend(): Promise<void> {
     return;
   }
 
-  // Record-only mode (실제 발송 꺼짐): 기록만, 문자 안 보냄.
+  // 재발송이면 기존 안내 이력을 이번 발송으로 업데이트(upsert). prev = 직전 기록(있으면).
+  const prev = await history.getRecord(item.phone, item.expiry_date);
+  const rec: SentRecord = {
+    ...dueItemToEntry(item, text),
+    channel: CFG.deliver_alerts ? "sms" : "record-only",
+    sent_at: nowIso(),
+  };
+
+  // Record-only mode (실제 발송 꺼짐): 기록/업데이트만, 문자 안 보냄.
   if (!CFG.deliver_alerts) {
-    const res = await sendAlert(item, CFG, { history, sendSms, nowIso }, text);
-    if (res.status === "sent" || res.status === "already") {
-      markHandled(item);
-      await history.cacheDueList(RESULTS);
-      toast(res.status === "already" ? "이미 발송된 고객입니다" : "기록되었습니다 (실제 발송 꺼짐)");
-    } else {
-      toast(res.error || "실패", { err: true });
-    }
+    await history.putRecord(rec);
+    markHandled(item);
+    await history.cacheDueList(RESULTS);
+    toast(prev ? "안내 이력을 업데이트했습니다 (미발송)" : "기록되었습니다 (실제 발송 꺼짐)");
     return;
   }
 
-  // Deliver ON — 낙관적: 기록 + 홈 처리 즉시, 전송은 백그라운드.
+  // Deliver ON — 낙관적: 기록/업데이트 + 홈 처리 즉시, 전송은 백그라운드.
   const key = `${item.phone}|${item.expiry_date}`;
   if (sendingKeys.has(key)) { toast("이미 발송 중입니다"); return; } // 중복 발송 방지
   sendingKeys.add(key);
-  const newly = await history.recordSent(dueItemToEntry(item, text), "sms", nowIso());
-  markHandled(item);
-  await history.cacheDueList(RESULTS);
-  if (!newly) { sendingKeys.delete(key); toast("이미 발송된 고객입니다"); return; }
-  toast("문자를 보냈습니다");
+  // 발송이 실제로 시작되기 전(기록/캐시 저장 단계)에 실패하면 in-flight 가드를 반드시
+  // 풀어 준다 — 안 그러면 그 고객이 세션 내내 "이미 발송 중"으로 막힌다.
+  try {
+    await history.putRecord(rec); // 신규면 insert, 재발송이면 update
+    markHandled(item);
+    await history.cacheDueList(RESULTS);
+  } catch (e) {
+    sendingKeys.delete(key);
+    toast(e instanceof Error ? e.message : "저장 실패 — 다시 시도하세요", { err: true });
+    return;
+  }
+  toast(prev ? "다시 보냈습니다 (안내 이력 업데이트)" : "문자를 보냈습니다");
   void sendSms(item.phone, text).then(
     () => sendingKeys.delete(key),
     async () => {
-      // 전송 실패 -> 이 발송이 넣은 기록을 되돌리고, 로그 기준으로 홈/캐시를 재계산해
-      // (캡처한 옛 객체가 아니라) 현재 목록의 해당 고객을 미발송으로 복귀시킨다.
+      // 전송 실패: 재발송이면 직전 이력을 되살려 '발송됨' 유지, 신규 발송이면 기록을
+      // 지워 고객을 홈에 미발송으로 복귀. 항상 로그 기준으로 목록/캐시를 재계산.
       sendingKeys.delete(key);
-      await history.remove(item.phone, item.expiry_date);
+      if (prev) await history.putRecord(prev);
+      else await history.remove(item.phone, item.expiry_date);
       await reconcileSentFlags();
       await history.cacheDueList(RESULTS);
       refreshAfterSend();
-      toast(`${item.customer || item.phone} 발송 실패 — 홈으로 되돌렸습니다`, { err: true });
+      toast(
+        prev
+          ? `${item.customer || item.phone} 재발송 실패 — 기존 이력 유지`
+          : `${item.customer || item.phone} 발송 실패 — 홈으로 되돌렸습니다`,
+        { err: true },
+      );
     },
   );
 }
@@ -1265,6 +1295,7 @@ function bind(): void {
     $<HTMLInputElement>("#s-poncle-pw").value = "";
     $("#creds-msg").textContent = "삭제됨";
   };
+  $("#btn-check-update").onclick = () => void checkUpdate(true); // 수동 업데이트 확인
   $("#btn-test-sms").onclick = async () => {
     const phone = $<HTMLInputElement>("#s-test-phone").value.trim();
     const msg = $("#test-sms-msg");
@@ -1314,23 +1345,32 @@ function anyModalOpen(): boolean {
   return $$(".modal-overlay:not(.hidden)").length > 0;
 }
 
-async function checkUpdate(): Promise<void> {
+/** `manual` (설정 > 업데이트 확인 버튼): bypass the debounce + session-mute and give
+ *  explicit feedback ("이미 최신 버전입니다") when there's no update. */
+async function checkUpdate(manual = false): Promise<void> {
   if (updateChecking) return;
-  if (anyModalOpen()) return; // don't stack over another overlay; a later trigger retries
+  if (!manual && anyModalOpen()) return; // auto: don't stack over another overlay
   const now = Date.now();
-  if (now - lastUpdateCheck < UPDATE_MIN_GAP_MS) return;
+  if (!manual && now - lastUpdateCheck < UPDATE_MIN_GAP_MS) return;
   updateChecking = true;
   lastUpdateCheck = now;
+  if (manual) toast("업데이트 확인 중…");
   try {
     const current = await getAppVersion().catch(() => "");
-    if (!current || current === "0.0.0") return;
+    if (!current || current === "0.0.0") {
+      if (manual) toast("버전 정보를 확인할 수 없습니다", { err: true });
+      return;
+    }
     const info = await checkForUpdate(current);
-    if (!info.available || !info.url) return;
+    if (!info.available || !info.url) {
+      if (manual) toast(`이미 최신 버전입니다 (v${current})`);
+      return;
+    }
     // Don't nag: once the user dismisses a version (나중에 OR 업데이트), stay quiet until
-    // a newer one appears (or the app restarts, which re-prompts — prior behavior).
-    if (updateDismissedVersion === info.version) return;
+    // a newer one appears (or the app restarts, which re-prompts). A MANUAL check always shows.
+    if (!manual && updateDismissedVersion === info.version) return;
     // A modal may have opened during the awaits above — re-check before showing.
-    if (anyModalOpen()) return;
+    if (!manual && anyModalOpen()) return;
     $("#upd-current").textContent = "v" + current;
     $("#upd-latest").textContent = "v" + info.version;
     $("#upd-notes").textContent = info.notes || "";

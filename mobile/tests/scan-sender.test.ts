@@ -85,6 +85,20 @@ describe("History", () => {
     expect((await h.search("", "2026-07-02")).length).toBe(1);
     expect((await h.search()).length).toBe(2);
   });
+  it("getRecord + putRecord upsert (재발송 updates the existing 이력, no duplicate)", async () => {
+    const h = new History(memKV());
+    const e = { phone: "010-9", customer: "박", opendate: "24-01-01", expiry_date: "2026-01-01",
+      milestone_offset: 5, telecom: "", agency: "", plan: "", model: "", openhow: "", staff: "" };
+    expect(await h.getRecord("010-9", "2026-01-01")).toBeNull();
+    await h.recordSent(e, "sms", "2026-07-01T09:00:00");
+    expect((await h.getRecord("010-9", "2026-01-01"))?.sent_at).toBe("2026-07-01T09:00:00");
+    // 재발송: replace by (phone|expiry) -> single updated row, no duplicate
+    await h.putRecord({ ...e, channel: "sms", sent_at: "2026-07-05T10:00:00", body: "다시" });
+    expect((await h.exportAll()).filter((r) => r.phone === "010-9").length).toBe(1);
+    const updated = await h.getRecord("010-9", "2026-01-01");
+    expect(updated?.sent_at).toBe("2026-07-05T10:00:00");
+    expect(updated?.body).toBe("다시");
+  });
 
   const dueItem = (phone: string, expiry: string): DueItem => ({
     id: `${phone}|${expiry}`, phone, customer: "", opendate: "", expiry_date: expiry,

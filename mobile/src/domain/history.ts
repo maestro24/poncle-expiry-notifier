@@ -155,6 +155,30 @@ export class History {
     return task;
   }
 
+  /** The stored record for (phone, expiry), or null. */
+  async getRecord(phone: string, expiry: string): Promise<SentRecord | null> {
+    const key = dedupKey(phone, expiry);
+    const rows = await this.all();
+    return rows.find((r) => dedupKey(r.phone, r.expiry_date) === key) ?? null;
+  }
+
+  /** Replace-or-insert a full record by (phone, expiry) — an upsert used by 재발송
+   *  (send again to an already-alerted customer, updating the existing 안내 이력).
+   *  Serialized against other mutations. */
+  async putRecord(rec: SentRecord): Promise<void> {
+    const key = dedupKey(rec.phone, rec.expiry_date);
+    const task = this.lock.then(async () => {
+      const rows = (await this.all()).filter((r) => dedupKey(r.phone, r.expiry_date) !== key);
+      rows.push(rec);
+      await this.writeAll(rows);
+    });
+    this.lock = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    return task;
+  }
+
   /** Cache the last scan's derived 미방문 list (full overwrite). Serialized. */
   async cacheUnvisited(rows: DueItem[]): Promise<void> {
     const task = this.lock.then(() =>
