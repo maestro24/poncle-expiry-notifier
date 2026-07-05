@@ -58,16 +58,8 @@ export const DEFAULT_TEMPLATES: MessageTemplate[] = [
   {
     id: "default-usim",
     name: "유심신규/유심MNP 전용 템플릿",
-    // KT / SK텔레콤 / LG유플러스 (main lines) 제외한 나머지 통신사.
-    telecoms: [
-      "U+알뜰모바일",
-      "KT엠모바일",
-      "SK텔링크",
-      "스카이라이프",
-      "기타통신사(KT)",
-      "기타통신사(SKT)",
-      "기타통신사(LGT)",
-    ],
+    // 통신사 무관 (유심 개통은 2년 약정이 아니라 빅3 포함 여부와 무관). 상태로만 구분.
+    telecoms: [],
     statuses: ["유심신규", "유심MNP"],
     body: `안녕하세요 {customer}고객님 😊
 
