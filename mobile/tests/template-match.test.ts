@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   conditionSummary,
+  isContractType,
   matchingTemplates,
   normalizeStatus,
   normalizeTelecom,
@@ -84,6 +85,12 @@ describe("templateMatches", () => {
     expect(templateMatches(item, tpl({ telecoms: ["SK텔레콤"], statuses: ["기변"] }))).toBe(true);
     expect(templateMatches(item, tpl({ telecoms: ["SK텔레콤"], statuses: ["신규"] }))).toBe(false);
   });
+  it("source(시점) group: keepdate vs term, empty = any", () => {
+    expect(templateMatches({ ...item, source: "keepdate" }, tpl({ sources: ["keepdate"] }))).toBe(true);
+    expect(templateMatches({ ...item, source: "term" }, tpl({ sources: ["keepdate"] }))).toBe(false);
+    expect(templateMatches({ ...item, source: "term" }, tpl())).toBe(true); // empty sources = any
+    expect(templateMatches(item, tpl({ sources: ["keepdate"] }))).toBe(false); // no source vs pinned -> no match
+  });
   it("unknown carrier never matches a carrier-pinned template", () => {
     expect(templateMatches({ telecom: "알뜰폰", openhow: "기변" }, tpl({ telecoms: ["SK텔레콤"] }))).toBe(false);
     // but still matches a wildcard-telecom template
@@ -104,9 +111,20 @@ describe("matchingTemplates", () => {
   });
 });
 
+describe("isContractType (약정 대상)", () => {
+  it("신규/번호이동/기변 are contract types", () => {
+    for (const t of ["신규", "번호이동", "기변", "기기변경"]) expect(isContractType(t)).toBe(true);
+  });
+  it("유심 variants and unmappable are not", () => {
+    for (const t of ["유심신규", "유심MNP", "유심 MNP", "유심기변", ""]) expect(isContractType(t)).toBe(false);
+  });
+});
+
 describe("conditionSummary", () => {
-  it("labels wildcards and lists", () => {
-    expect(conditionSummary(tpl())).toBe("모든 통신사 / 모든 상태");
-    expect(conditionSummary(tpl({ telecoms: ["KT", "SK텔레콤"], statuses: ["기변"] }))).toBe("KT·SK텔레콤 / 기변");
+  it("labels wildcards and lists (시점 / 상태 / 통신사)", () => {
+    expect(conditionSummary(tpl())).toBe("모든 시점 / 모든 상태 / 모든 통신사");
+    expect(
+      conditionSummary(tpl({ sources: ["keepdate"], statuses: ["기변"], telecoms: ["KT", "SK텔레콤"] })),
+    ).toBe("요금제 유지 / 기변 / KT·SK텔레콤");
   });
 });

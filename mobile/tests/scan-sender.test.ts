@@ -181,13 +181,14 @@ describe("runScan", () => {
     expect(res.pending).toBe(0);
   });
 
-  it("hybrid: 유지일 overrides term + blacklists the phone; term covers the rest", async () => {
+  it("2단계: 약정 대상은 유지일이 있어도 약정(term)이 뜬다 (블랙리스트 제거); 유심은 유지일만", async () => {
     const openRows: PoncleRow[] = [
-      // A: term-expiry == today, BUT has a future 유지일 -> suppressed, not due today
+      // A: 약정 만료 == today, AND a future 유지일. OLD 모델이면 블랙리스트로 제외됐지만
+      //    이제 약정(2단계)은 유지일과 무관하게 뜬다. (유지일 2026-07-10은 window 0 밖)
       { openphone: "010-1111-2222", customer: "A", opendate: "24-07-03", openhowx: "기변", telecomx: "SK텔레콤", agencytitle: "CD대리점", model: "m" },
-      // B: term-expiry == today, no 유지일 -> term item
+      // B: 약정 만료 == today, no 유지일 -> term item
       { openphone: "010-2222-3333", customer: "B", opendate: "24-07-03", openhowx: "기변", telecomx: "KT", agencytitle: "CD대리점", model: "m" },
-      // C: term-expiry 2026-07-01 (not today), but 유지일 == today -> keepdate item
+      // C: 유심(약정 없음), 유지일 == today -> keepdate item only
       { openphone: "010-3333-4444", customer: "C", opendate: "26-01-01", openhowx: "유심신규", telecomx: "KT", agencytitle: "쇼플러스", model: "m" },
     ];
     const pending: PoncleRow[] = [
@@ -197,14 +198,52 @@ describe("runScan", () => {
     const res = await runScan(gatewayReturning(openRows, pending), cfg({ use_server_date_filter: false, notify_offsets_days: [0] }), new History(memKV()), TODAY);
     expect(res.status).toBe("ok");
     const byPhone = Object.fromEntries(res.results.map((r) => [r.phone, r]));
-    expect(byPhone["010-1111-2222"]).toBeUndefined(); // 유지일 있음(미래) -> term 제외, 범위 밖 -> 안 뜸
+    expect(byPhone["010-1111-2222"]?.source).toBe("term"); // 유지일 있어도 약정 만료로 뜬다
+    expect(byPhone["010-1111-2222"]?.expiry_date).toBe("2026-07-03");
     expect(byPhone["010-2222-3333"]?.source).toBe("term");
     expect(byPhone["010-2222-3333"]?.expiry_date).toBe("2026-07-03");
     expect(byPhone["010-3333-4444"]?.source).toBe("keepdate");
     expect(byPhone["010-3333-4444"]?.expiry_date).toBe("2026-07-03");
     expect(byPhone["010-3333-4444"]?.openhow).toBe("유심신규"); // joined from open
     expect(byPhone["010-3333-4444"]?.telecom).toBe("KT");
-    expect(res.targets).toBe(2);
+    expect(res.targets).toBe(3);
+  });
+
+  it("2단계: 유지일 미결 없는 고객은 개통+기본 6개월에 요금제 유지(keepdate) 알림", async () => {
+    // 기변 opened 26-01-03 -> 6mo default = 2026-07-03 = today. 약정 24mo is far off.
+    const openRows: PoncleRow[] = [
+      { openphone: "010-6666-7777", customer: "E", opendate: "26-01-03", openhowx: "기변", telecomx: "KT", agencytitle: "CD", model: "m" },
+    ];
+    const res = await runScan(gatewayReturning(openRows, []), cfg({ use_server_date_filter: false, notify_offsets_days: [0] }), new History(memKV()), TODAY);
+    const mine = res.results.filter((r) => r.phone === "010-6666-7777");
+    expect(mine.length).toBe(1);
+    expect(mine[0].source).toBe("keepdate"); // Pass B 기본 6개월
+    expect(mine[0].expiry_date).toBe("2026-07-03");
+  });
+
+  it("2단계: 한 약정 고객이 유지일(1단계) + 약정(2단계)을 각각 받는다 (다른 날짜 -> 둘 다 생존)", async () => {
+    const openRows: PoncleRow[] = [
+      { openphone: "010-5555-6666", customer: "D", opendate: "24-07-03", openhowx: "기변", telecomx: "KT", agencytitle: "CD", model: "m" },
+    ];
+    const pending: PoncleRow[] = [
+      { gubunx: "요금제유지", condx: "접수", pendingdate: "2026-07-20", openphone: "010-5555-6666", name: "D" },
+    ];
+    const res = await runScan(gatewayReturning(openRows, pending), cfg({ use_server_date_filter: false, notify_offsets_days: [30] }), new History(memKV()), TODAY);
+    const mine = res.results.filter((r) => r.phone === "010-5555-6666");
+    const bySource = Object.fromEntries(mine.map((r) => [r.source, r]));
+    expect(mine.length).toBe(2);
+    expect(bySource["keepdate"]?.expiry_date).toBe("2026-07-20"); // 유지일 (1단계)
+    expect(bySource["term"]?.expiry_date).toBe("2026-07-03"); // 약정 만료 (2단계)
+  });
+
+  it("2단계: 유심은 약정(term)이 없다 — 요금제 유지만", async () => {
+    const openRows: PoncleRow[] = [
+      { openphone: "010-8888-9999", customer: "F", opendate: "26-01-03", openhowx: "유심신규", telecomx: "KT", agencytitle: "CD", model: "m" },
+    ];
+    const res = await runScan(gatewayReturning(openRows, []), cfg({ use_server_date_filter: false, notify_offsets_days: [0] }), new History(memKV()), TODAY);
+    const mine = res.results.filter((r) => r.phone === "010-8888-9999");
+    expect(mine.length).toBe(1);
+    expect(mine[0].source).toBe("keepdate"); // 유심은 term 없음
   });
 
   it("미방문 auto-clears a returned customer even with the server date filter ON", async () => {

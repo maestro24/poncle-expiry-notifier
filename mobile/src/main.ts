@@ -5,7 +5,6 @@
 import { Preferences } from "@capacitor/preferences";
 import { Share } from "@capacitor/share";
 import { DEFAULTS, loadConfig, saveConfig, seedDefaultTemplates } from "./domain/config";
-import { isStandardOpenType, normalizeAgency, resolveTermMonths } from "./domain/expiry";
 import { buildBackup, historyToCsv, parseBackup } from "./domain/export";
 import { History, preferencesKV } from "./domain/history";
 import { cohortStats, COHORT_WINDOW_DAYS } from "./domain/cohort";
@@ -18,7 +17,7 @@ import { runScan, type ScanState } from "./domain/scan";
 import { renderTemplate, sendAlert } from "./domain/sender";
 import { conditionSummary, matchingTemplates } from "./domain/template-match";
 import { checkForUpdate } from "./domain/updater";
-import { STATUSES, TELECOMS, type AppConfig, type DueItem, type MessageTemplate, type StatusCode, type TelecomCode } from "./domain/types";
+import { MILESTONE_SOURCES, STATUSES, TELECOMS, type AppConfig, type DueItem, type MessageTemplate, type MilestoneSource, type StatusCode, type TelecomCode } from "./domain/types";
 import {
   clearPoncleCredentials,
   getAppVersion,
@@ -55,15 +54,6 @@ let LK_LAST_QUERY = "";
 const LK_RECENT_KEY = "lookup_recent";
 const LOOKUP_SOON_DAYS = 30; // "곧 만료"로 볼 임계(조회 화면 전용)
 
-const AGENCIES = [
-  "CD대리점", "DMB 엘지", "M&S분당도매센터", "MCC - 스테이지파이브SK", "MCC- SK텔링크",
-  "MCC- 엠모바일", "MCC-KT엠모바일 후불유심", "mcc-kt중고후불", "MCC-미디어로그후불",
-  "MCC-스카이라이프", "MCC-스테이지파이브KT", "MCC-코드모바일KT", "MCC-코드모바일LG",
-  "MCC-프리티KT", "MCC-프리티LG", "MCC-프리티SK", "MCC-헬로비젼LG", "MCC/SK후불", "MCCKT",
-  "PS&M", "SK경승컴퍼니온라인", "광운통신(라우터)", "대산LG", "메타레이kt", "미디어원KT",
-  "쇼플러스", "유니컴즈(모빙) KT", "유니컴즈(모빙)LGT", "유니컴즈(모빙)SK", "유안-엔네트웍스",
-  "티인포(mcc)",
-];
 const DDAY_OPTIONS = [30, 14, 7, 3, 1, 0];
 const VARS: Array<[string, string]> = [
   ["고객명", "{customer}"], ["통신사", "{telecom}"], ["모델", "{model}"],
@@ -85,11 +75,6 @@ function nowShort(): string {
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
-}
-function decodeHtml(s: string): string {
-  const t = document.createElement("textarea");
-  t.innerHTML = String(s ?? "");
-  return t.value;
 }
 
 /* ---------- toast ---------- */
@@ -215,23 +200,13 @@ function dueCard(item: DueItem): HTMLElement {
   return card;
 }
 function whyText(item: DueItem): string {
-  // 요금제 유지일 기준으로 뜬 건은 약정 계산이 아니라 폰클 미결의 유지일을 그대로 씀.
+  const dn = item.milestone_offset === 0 ? "오늘" : `D-${item.milestone_offset}`;
   if (item.source === "keepdate") {
-    const dn = item.milestone_offset === 0 ? "오늘" : `${item.milestone_offset}일 전`;
-    return `요금제 유지일 기준 (미결 등록)\n유지일 ${item.expiry_date} · ${dn}`;
+    // 1단계: 폰클 요금제유지 미결의 유지일, 없으면 개통+기본 개월. -> 템플릿 1.
+    return `요금제 유지 시점 (1단계) · 요금제 유지 템플릿\n유지 예정 ${item.expiry_date} · ${dn}\n개통 ${item.opendate}`;
   }
-  const term = resolveTermMonths({ openhowx: item.openhow, agencytitle: item.agency }, CFG);
-  let basis: string;
-  if (isStandardOpenType(item.openhow)) {
-    basis = "표준(기변/신규)";
-  } else {
-    const overrides = CFG.agency_term_months || {};
-    const norm = normalizeAgency(item.agency);
-    const hasOverride = Object.keys(overrides).some((k) => normalizeAgency(k) === norm);
-    basis = hasOverride ? "거래처 예외" : "그 외 기본";
-  }
-  const dn = item.milestone_offset === 0 ? "오늘 만료" : `만료 ${item.milestone_offset}일 전 (D-${item.milestone_offset})`;
-  return `적용 약정 ${term}개월 · ${basis}\n개통 ${item.opendate} → 만료 ${item.expiry_date} · ${dn}`;
+  // 2단계: 약정 만료 (약정 대상, 개통+약정 개월). -> 템플릿 2.
+  return `약정 만료 시점 (2단계) · 약정 만료 템플릿\n약정 만료 ${item.expiry_date} · ${dn}\n개통 ${item.opendate}`;
 }
 function actionEl(item: DueItem): HTMLElement {
   if (item.already_sent) {
@@ -869,36 +844,6 @@ async function onLookupCopy(r: LookupResult): Promise<void> {
 }
 
 /* ---------- settings ---------- */
-function agencyList(): string[] {
-  const seen = new Set(AGENCIES);
-  const extra: string[] = [];
-  for (const r of RESULTS) {
-    const name = decodeHtml(r.agency || "").trim();
-    if (name && !seen.has(name)) { seen.add(name); extra.push(name); }
-  }
-  extra.sort((a, b) => a.localeCompare(b, "ko"));
-  return AGENCIES.concat(extra);
-}
-function buildAgencyTerms(): void {
-  const box = $("#agency-terms");
-  box.innerHTML = "";
-  const overrides = CFG.agency_term_months || {};
-  const fallback = CFG.nonstandard_term_months ?? 6;
-  for (const name of agencyList()) {
-    const row = document.createElement("div");
-    row.className = "ex-row";
-    row.innerHTML = `<span class="ex-name">${esc(name)}</span>`;
-    const input = document.createElement("input");
-    input.type = "number";
-    input.min = "0";
-    input.max = "60";
-    input.className = "numbox agency-term";
-    input.dataset.agency = name;
-    input.value = String(name in overrides ? overrides[name] : fallback);
-    row.appendChild(input);
-    box.appendChild(row);
-  }
-}
 function buildDDayChips(): void {
   const box = $("#dday-chips");
   box.innerHTML = "";
@@ -958,27 +903,19 @@ async function saveSettingsNow(): Promise<void> {
 
 /* ---------- terms (약정 기간) sub-screen ---------- */
 function populateTerms(): void {
+  // #s-standard-term = 약정 개월(2단계), #s-nonstandard-term = 요금제 유지 기본 개월(1단계).
   $<HTMLInputElement>("#s-standard-term").value = String(CFG.default_term_months ?? 24);
-  $<HTMLInputElement>("#s-nonstandard-term").value = String(CFG.nonstandard_term_months ?? 6);
+  $<HTMLInputElement>("#s-nonstandard-term").value = String(CFG.keepdate_default_months ?? 6);
   $<HTMLInputElement>("#s-unvisited-lookback").value = String(CFG.unvisited_lookback_months ?? 6);
-  buildAgencyTerms();
 }
 function gatherTerms(): Partial<AppConfig> {
-  const nonstandard = parseInt($<HTMLInputElement>("#s-nonstandard-term").value, 10);
-  const nonstandardTerm = Number.isFinite(nonstandard) ? nonstandard : 6;
+  const keepRaw = parseInt($<HTMLInputElement>("#s-nonstandard-term").value, 10);
   const lookbackRaw = parseInt($<HTMLInputElement>("#s-unvisited-lookback").value, 10);
   const lookback = Number.isFinite(lookbackRaw) ? Math.max(0, Math.min(36, lookbackRaw)) : 6;
-  const agencyTerms: Record<string, number> = {};
-  $$(".agency-term").forEach((inp) => {
-    const v = parseInt((inp as HTMLInputElement).value, 10);
-    const name = (inp as HTMLInputElement).dataset.agency!;
-    if (Number.isFinite(v) && v !== nonstandardTerm) agencyTerms[name] = v;
-  });
   return {
     default_term_months: parseInt($<HTMLInputElement>("#s-standard-term").value, 10) || 24,
-    nonstandard_term_months: nonstandardTerm,
+    keepdate_default_months: Number.isFinite(keepRaw) ? Math.max(0, keepRaw) : 6,
     unvisited_lookback_months: lookback,
-    agency_term_months: agencyTerms,
   };
 }
 async function saveTermsNow(): Promise<void> {
@@ -1007,7 +944,15 @@ function renderTemplateList(): void {
     list.appendChild(card);
   }
 }
-function buildCheckChips(holderId: string, options: readonly string[], selected: string[]): void {
+/** 시점(source) chip labels — the stored value is keepdate/term, shown human-readable. */
+const SOURCE_LABEL: Record<MilestoneSource, string> = { keepdate: "요금제 유지", term: "약정 만료" };
+
+function buildCheckChips(
+  holderId: string,
+  options: readonly string[],
+  selected: string[],
+  labelOf?: (opt: string) => string,
+): void {
   const box = $("#" + holderId);
   box.innerHTML = "";
   for (const opt of options) {
@@ -1015,7 +960,7 @@ function buildCheckChips(holderId: string, options: readonly string[], selected:
     b.type = "button";
     b.className = "checkchip" + (selected.includes(opt) ? " on" : "");
     b.dataset.val = opt;
-    b.textContent = opt;
+    b.textContent = labelOf ? labelOf(opt) : opt;
     b.onclick = () => b.classList.toggle("on");
     box.appendChild(b);
   }
@@ -1031,6 +976,7 @@ function openTemplateEdit(id: string | null): void {
   $("#te-title").textContent = t ? "템플릿 수정" : "새 템플릿";
   $<HTMLInputElement>("#te-name").value = t?.name || "";
   $<HTMLTextAreaElement>("#te-body").value = t?.body || "";
+  buildCheckChips("te-sources", MILESTONE_SOURCES, t?.sources ?? [], (s) => SOURCE_LABEL[s as MilestoneSource]);
   buildCheckChips("te-telecoms", TELECOMS, t?.telecoms ?? []);
   buildCheckChips("te-statuses", STATUSES, t?.statuses ?? []);
   buildVarChips();
@@ -1044,12 +990,13 @@ async function saveTemplate(): Promise<void> {
   if (!body) { $("#te-msg").textContent = "문구를 입력하세요"; return; }
   const telecoms = gatherCheck("te-telecoms") as TelecomCode[];
   const statuses = gatherCheck("te-statuses") as StatusCode[];
+  const sources = gatherCheck("te-sources") as MilestoneSource[];
   const tpls: MessageTemplate[] = [...(CFG.templates || [])];
   if (editingId) {
     const i = tpls.findIndex((x) => x.id === editingId);
-    if (i >= 0) tpls[i] = { id: editingId, name, telecoms, statuses, body };
+    if (i >= 0) tpls[i] = { id: editingId, name, telecoms, statuses, sources, body };
   } else {
-    tpls.push({ id: newTemplateId(), name, telecoms, statuses, body });
+    tpls.push({ id: newTemplateId(), name, telecoms, statuses, sources, body });
   }
   CFG = await saveConfig({ ...CFG, templates: tpls });
   toast("템플릿을 저장했습니다");
@@ -1178,6 +1125,7 @@ function addTestTarget(): void {
     phone: "010-1234-5678", customer: "홍길동(테스트)", opendate: yy, expiry_date: iso,
     milestone_offset: 0, telecom: "SK텔레콤", agency: "테스트대리점", openhow: "번호이동",
     plan: "5G 프리미어 에센셜 55000", model: "테스트모델", staff: "", already_sent: false, test: true,
+    source: "term", // 약정 만료(2단계) 템플릿으로 라우팅되도록
   }]);
   showScreen("home");
   renderDueList();

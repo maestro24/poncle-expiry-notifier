@@ -7,9 +7,11 @@
  *   telecomx  : "SK텔레콤" | ...
  *   agencytitle, customer, openphone, model, membername, ...
  *
- * Expiry = opendate + term_months. term_months comes from 개통유형: 기변/신규 use
- * default_term_months (24); every other type uses the row's 거래처 term from
- * agency_term_months, or nonstandard_term_months (6) if that 거래처 has no override.
+ * 2단계 마일스톤 모델:
+ *  - 요금제 유지 (1단계): 폰클 요금제유지 미결의 유지일, 없으면 개통 + keepdate_default_months(6).
+ *    모든 개통 대상. -> 템플릿 1.
+ *  - 약정 만료 (2단계): 약정 대상(신규/번호이동/기변)만, 개통 + default_term_months(24). -> 템플릿 2.
+ * computeExpiry는 "그 고객의 대표 만료"(약정 대상=약정, 유심=요금제 유지)를 돌려줘 조회/미방문에 쓴다.
  */
 import { htmlUnescape } from "./html-entities";
 import {
@@ -20,6 +22,7 @@ import {
   makeDate,
   toIso,
 } from "./plaindate";
+import { isContractType } from "./template-match";
 import type { AppConfig, PoncleRow } from "./types";
 
 // 개통유형(openhowx)이 정확히 이 값이면 표준 약정(기변/신규). "유심신규"는 "신규"를
@@ -91,30 +94,29 @@ function toInt(v: unknown, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-/** 개통유형 기변/신규 -> 표준 약정. 그 외 -> 거래처별 값(없으면 비표준 기본). */
-export function resolveTermMonths(row: PoncleRow, config: AppConfig): number {
-  if (isStandardOpenType(field(row, "openhowx"))) {
-    return toInt(config.default_term_months, 24);
-  }
-  const agency = normalizeAgency(field(row, "agencytitle"));
-  const overrides = config.agency_term_months ?? {};
-  for (const [name, months] of Object.entries(overrides)) {
-    if (normalizeAgency(name) === agency) {
-      const n = typeof months === "number" ? months : parseInt(String(months), 10);
-      if (Number.isFinite(n)) return n;
-      break;
-    }
-  }
-  return toInt(config.nonstandard_term_months, 6);
+/** 약정 개월 (2단계): 약정 대상의 약정 만료 = 개통 + 이 개월. */
+export function contractTermMonths(config: AppConfig): number {
+  return toInt(config.default_term_months, 24);
 }
 
-/** Return the expiry date, or null if the row has no computable/relevant term. */
+/** 요금제 유지 기본 개월 (1단계): 폰클 유지일이 없을 때 요금제 유지 시점 개월. */
+export function keepdateDefaultMonths(config: AppConfig): number {
+  return toInt(config.keepdate_default_months, 6);
+}
+
+/**
+ * The customer's representative "만료" for 조회/미방문: 약정 대상은 약정 만료
+ * (개통+약정 개월), 유심 등 그 외는 요금제 유지(개통+기본 개월). null when the
+ * opendate is unparseable or the resolved term is non-positive.
+ */
 export function computeExpiry(row: PoncleRow, config: AppConfig): PlainDate | null {
   const openD = parseOpendate(field(row, "opendate"));
   if (openD === null) return null;
-  const term = resolveTermMonths(row, config);
-  if (term <= 0) return null;
-  return addMonths(openD, term);
+  const months = isContractType(field(row, "openhowx"))
+    ? contractTermMonths(config)
+    : keepdateDefaultMonths(config);
+  if (months <= 0) return null;
+  return addMonths(openD, months);
 }
 
 /** Sorted, de-duplicated, non-negative notify offsets (days before expiry). */
@@ -140,35 +142,30 @@ export function lookAheadDays(config: AppConfig): number {
   return Math.max(...offs);
 }
 
-/** All positive contract terms in play (default + nonstandard + agency overrides). */
+/** All positive milestone terms in play (약정 개월 + 요금제 유지 기본 개월), for fetch breadth. */
 function positiveTerms(config: AppConfig): number[] {
-  const set = new Set<number>([
-    toInt(config.default_term_months, 24),
-    toInt(config.nonstandard_term_months, 6),
-  ]);
-  for (const months of Object.values(config.agency_term_months ?? {})) {
-    const n = typeof months === "number" ? months : parseInt(String(months), 10);
-    if (Number.isFinite(n)) set.add(n);
-  }
-  return Array.from(set).filter((t) => t > 0);
+  return [contractTermMonths(config), keepdateDefaultMonths(config)].filter((t) => t > 0);
 }
 
 /**
- * Whether this row is due within the look-ahead window. Returns a single
- * [daysUntilExpiry, expiry] pair when 0 <= (expiry - today) <= window, else [].
- * daysUntilExpiry is the ACTUAL remaining days (used for the {when} phrase); it
- * is NOT part of the dedup key, so a customer shows every day until sent, once.
+ * A single milestone `[daysUntil, date]` when `opendate + months` falls within the
+ * look-ahead window [today, today+window]; else null. `daysUntil` is the ACTUAL
+ * remaining days (used for the {when} phrase); it is NOT part of the dedup key, so
+ * a customer shows every day until sent, once. Used by both scan milestones
+ * (요금제 유지 기본 6개월, 약정 24개월).
  */
-export function dueWithin(
-  row: PoncleRow,
+export function milestoneDue(
+  openIso: string,
+  months: number,
   config: AppConfig,
   todayD: PlainDate,
-): Array<[number, PlainDate]> {
-  const expiry = computeExpiry(row, config);
-  if (expiry === null) return [];
-  const days = daysBetween(expiry, todayD); // expiry - today
-  if (days < 0 || days > lookAheadDays(config)) return [];
-  return [[days, expiry]];
+): [number, PlainDate] | null {
+  const open = parseOpendate(openIso);
+  if (open === null || months <= 0) return null;
+  const date = addMonths(open, months);
+  const days = daysBetween(date, todayD); // date - today
+  if (days < 0 || days > lookAheadDays(config)) return null;
+  return [days, date];
 }
 
 /**

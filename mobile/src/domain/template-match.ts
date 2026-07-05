@@ -7,11 +7,22 @@
  * (telecomx / openhowx) are first normalized to the canonical codes so minor
  * spelling/format differences ("SK텔레콤" vs "SKT", "기기변경" vs "기변") match.
  */
-import { TELECOMS, type MessageTemplate, type StatusCode, type TelecomCode } from "./types";
+import { TELECOMS, type MessageTemplate, type MilestoneSource, type StatusCode, type TelecomCode } from "./types";
 
 interface Matchable {
   telecom?: string;
   openhow?: string;
+  /** Which milestone produced this item (요금제 유지 vs 약정 만료). */
+  source?: MilestoneSource;
+}
+
+/** 약정 대상 상태(2년 약정): 신규/번호이동/기변. 유심신규/유심MNP는 약정 없음. */
+const CONTRACT_STATUSES: ReadonlySet<StatusCode> = new Set<StatusCode>(["신규", "번호이동", "기변"]);
+
+/** True when the 개통유형 is a 약정 대상 (gets the 약정 만료 2단계). */
+export function isContractType(openhow: string): boolean {
+  const st = normalizeStatus(openhow);
+  return st !== "" && CONTRACT_STATUSES.has(st);
 }
 
 const TELECOM_SET: ReadonlySet<string> = new Set(TELECOMS);
@@ -62,13 +73,15 @@ export function normalizeStatus(raw: string): StatusCode | "" {
   return "";
 }
 
-/** True when the item's telecom + 상태 satisfy this template's conditions. */
+/** True when the item's telecom + 상태 + 시점(source) satisfy this template's
+ *  conditions. Each empty condition group is a wildcard; groups are AND-ed. */
 export function templateMatches(item: Matchable, tpl: MessageTemplate): boolean {
   const tel = normalizeTelecom(item.telecom ?? "");
   const st = normalizeStatus(item.openhow ?? "");
   const telOk = !tpl.telecoms?.length || (tel !== "" && tpl.telecoms.includes(tel));
   const stOk = !tpl.statuses?.length || (st !== "" && tpl.statuses.includes(st));
-  return telOk && stOk;
+  const srcOk = !tpl.sources?.length || (!!item.source && tpl.sources.includes(item.source));
+  return telOk && stOk && srcOk;
 }
 
 /** Templates that match the item, preserving list order (first = highest priority). */
@@ -76,9 +89,12 @@ export function matchingTemplates(item: Matchable, templates: MessageTemplate[])
   return (templates ?? []).filter((t) => templateMatches(item, t));
 }
 
+const SOURCE_LABEL: Record<MilestoneSource, string> = { keepdate: "요금제 유지", term: "약정 만료" };
+
 /** Short human summary of a template's conditions, for list rows. */
 export function conditionSummary(tpl: MessageTemplate): string {
-  const tel = tpl.telecoms?.length ? tpl.telecoms.join("·") : "모든 통신사";
+  const src = tpl.sources?.length ? tpl.sources.map((s) => SOURCE_LABEL[s]).join("·") : "모든 시점";
   const st = tpl.statuses?.length ? tpl.statuses.join("·") : "모든 상태";
-  return `${tel} / ${st}`;
+  const tel = tpl.telecoms?.length ? tpl.telecoms.join("·") : "모든 통신사";
+  return `${src} / ${st} / ${tel}`;
 }

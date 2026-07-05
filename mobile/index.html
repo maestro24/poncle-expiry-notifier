@@ -240,21 +240,16 @@
     </div>
     <div class="scroll">
       <div class="setcard">
-        <div class="setcard-title">개통 유형별 기본</div>
-        <div class="setcard-sub">개통일에 이 개월 수를 더해 만료일을 계산합니다</div>
+        <div class="setcard-title">2단계 알림 개월</div>
+        <div class="setcard-sub">개통일 기준으로 각 시점을 계산합니다</div>
         <div class="row-between">
-          <span>기변 · 신규 <span class="muted">(표준)</span></span>
+          <span>약정 개월 <span class="muted">(2단계 · 신규/번호이동/기변)</span></span>
           <span class="num-wrap"><input type="number" id="s-standard-term" min="1" max="60" /><em>개월</em></span>
         </div>
         <div class="row-between">
-          <span>그 외 기본 <span class="muted">(번호이동/유심)</span></span>
+          <span>요금제 유지 기본 <span class="muted">(1단계 · 미결 없을 때)</span></span>
           <span class="num-wrap"><input type="number" id="s-nonstandard-term" min="0" max="60" /><em>개월</em></span>
         </div>
-      </div>
-      <div class="setcard">
-        <div class="setcard-title">거래처별 예외</div>
-        <div class="setcard-sub">개월 수를 다르게 쓰는 거래처만 조정 <span class="muted">(0 = 알림 제외)</span></div>
-        <div id="agency-terms" class="ex-list"></div>
       </div>
       <div class="setcard">
         <div class="setcard-title">미방문 추적 기간</div>
@@ -292,6 +287,11 @@
         <div class="setcard-title">템플릿 이름</div>
         <div class="setcard-sub">목록에서 알아보기 위한 이름 (예: KT 기변용)</div>
         <input type="text" id="te-name" class="grow" placeholder="템플릿 이름" style="width:100%;margin-top:10px" />
+      </div>
+      <div class="setcard">
+        <div class="setcard-title">시점 조건 <span class="muted">(중요)</span></div>
+        <div class="setcard-sub">이 문구를 어느 시점에 보낼지 <span class="muted">(아무것도 안 고르면 모든 시점)</span></div>
+        <div class="checkchips" id="te-sources"></div>
       </div>
       <div class="setcard">
         <div class="setcard-title">통신사 조건</div>

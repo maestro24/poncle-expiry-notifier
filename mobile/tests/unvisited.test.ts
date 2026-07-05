@@ -1,12 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULTS } from "../src/domain/config";
 import { makeDate } from "../src/domain/plaindate";
-import {
-  computeUnvisited,
-  keepUnvisited,
-  latestOpenByPhone,
-  termUnvisited,
-} from "../src/domain/unvisited";
+import { computeUnvisited, latestOpenByPhone } from "../src/domain/unvisited";
 import type { AppConfig, PoncleRow } from "../src/domain/types";
 
 const cfg = (over: Partial<AppConfig> = {}): AppConfig => ({ ...DEFAULTS, ...over });
@@ -38,11 +33,11 @@ describe("latestOpenByPhone", () => {
   });
 });
 
-describe("termUnvisited", () => {
-  it("includes a phone whose latest contract expired within the look-back", () => {
+describe("computeUnvisited", () => {
+  it("includes a 약정 대상 whose 약정(24mo) expired within the look-back (source=term)", () => {
     // opendate 24-06-01 + 24m = 2026-06-01 (expired 32 days ago, within 6 months)
     const rows = [openRow("010-1111-2222", "24-06-01")];
-    const out = termUnvisited(rows, cfg(), TODAY, NONE, NONE);
+    const out = computeUnvisited(rows, cfg(), TODAY, NONE);
     expect(out.length).toBe(1);
     expect(out[0].expiry_date).toBe("2026-06-01");
     expect(out[0].source).toBe("term");
@@ -51,14 +46,19 @@ describe("termUnvisited", () => {
     expect(out[0].already_sent).toBe(false);
   });
 
-  it("excludes contracts not yet expired (those are the due list's job)", () => {
-    const rows = [openRow("010-1", "24-08-01")]; // expiry 2026-08-01 (future)
-    expect(termUnvisited(rows, cfg(), TODAY, NONE, NONE)).toEqual([]);
+  it("uses 요금제 유지 기본 6개월 for 유심, source=keepdate", () => {
+    // 유심 opendate 26-01-01 + 6mo = 2026-07-01 (expired 2 days ago, within the floor)
+    const rows = [openRow("010-2222-3333", "26-01-01", { openhowx: "유심신규" })];
+    const out = computeUnvisited(rows, cfg(), TODAY, NONE);
+    expect(out.length).toBe(1);
+    expect(out[0].expiry_date).toBe("2026-07-01");
+    expect(out[0].source).toBe("keepdate");
   });
 
-  it("excludes contracts expired before the look-back floor (aged out)", () => {
-    const rows = [openRow("010-1", "23-01-01")]; // expiry 2025-01-01 (> 6 months ago)
-    expect(termUnvisited(rows, cfg(), TODAY, NONE, NONE)).toEqual([]);
+  it("excludes not-yet-expired / aged-out / 무약정(unparseable) rows", () => {
+    expect(computeUnvisited([openRow("010-1", "24-08-01")], cfg(), TODAY, NONE)).toEqual([]); // future 2026-08-01
+    expect(computeUnvisited([openRow("010-2", "23-01-01")], cfg(), TODAY, NONE)).toEqual([]); // aged out 2025-01-01
+    expect(computeUnvisited([openRow("010-3", "")], cfg(), TODAY, NONE)).toEqual([]); // no computable 만료
   });
 
   it("auto-clears a returned customer: a newer open row makes the latest future-dated", () => {
@@ -66,79 +66,24 @@ describe("termUnvisited", () => {
       openRow("010-1111-2222", "24-06-01"), // expired 2026-06-01
       openRow("010-1111-2222", "26-07-01"), // returned & re-contracted -> latest is future
     ];
-    expect(termUnvisited(rows, cfg(), TODAY, NONE, NONE)).toEqual([]);
-  });
-
-  it("skips 유지일 (blacklisted) phones — keepUnvisited judges those", () => {
-    const rows = [openRow("010-1111-2222", "24-06-01")];
-    const blacklist = new Set(["01011112222"]);
-    expect(termUnvisited(rows, cfg(), TODAY, blacklist, NONE)).toEqual([]);
-  });
-
-  it("excludes 무약정 rows (term 0 -> no expiry)", () => {
-    const rows = [openRow("010-1", "24-06-01", { openhowx: "번호이동", agencytitle: "무약정처" })];
-    const out = termUnvisited(rows, cfg({ agency_term_months: { 무약정처: 0 } }), TODAY, NONE, NONE);
-    expect(out).toEqual([]);
+    expect(computeUnvisited(rows, cfg(), TODAY, NONE)).toEqual([]);
   });
 
   it("tags already_sent from the sent key set", () => {
     const rows = [openRow("010-1111-2222", "24-06-01")];
     const sent = new Set(["010-1111-2222|2026-06-01"]);
-    expect(termUnvisited(rows, cfg(), TODAY, NONE, sent)[0].already_sent).toBe(true);
-  });
-});
-
-describe("keepUnvisited", () => {
-  const pending = (over: Partial<PoncleRow>): PoncleRow => ({
-    gubunx: "요금제유지",
-    condx: "접수",
-    pendingdate: "2026-06-01",
-    openphone: "010-9999-0000",
-    name: "유지고객",
-    ...over,
+    expect(computeUnvisited(rows, cfg(), TODAY, sent)[0].already_sent).toBe(true);
   });
 
-  it("includes a passed, unresolved 유지일 with no re-activation", () => {
-    const out = keepUnvisited([pending({})], [], cfg(), TODAY, NONE);
-    expect(out.length).toBe(1);
-    expect(out[0].source).toBe("keepdate");
-    expect(out[0].expiry_date).toBe("2026-06-01");
-    expect(out[0].customer).toBe("유지고객"); // name fallback (no open join)
-  });
-
-  it("excludes 해결 (resolved = handled)", () => {
-    expect(keepUnvisited([pending({ condx: "해결" })], [], cfg(), TODAY, NONE)).toEqual([]);
-  });
-
-  it("excludes an aged-out 유지일", () => {
-    expect(keepUnvisited([pending({ pendingdate: "2025-06-01" })], [], cfg(), TODAY, NONE)).toEqual([]);
-  });
-
-  it("auto-clears when a newer 개통 exists after the 유지일 (customer returned)", () => {
-    const opens = [openRow("010-9999-0000", "26-06-15")]; // opened after 유지일 2026-06-01
-    expect(keepUnvisited([pending({})], opens, cfg(), TODAY, NONE)).toEqual([]);
-  });
-
-  it("joins type/telecom from the open row when present", () => {
-    const opens = [openRow("010-9999-0000", "24-01-01", { telecomx: "KT", openhowx: "유심신규" })];
-    const out = keepUnvisited([pending({})], opens, cfg(), TODAY, NONE);
-    expect(out[0].telecom).toBe("KT");
-    expect(out[0].openhow).toBe("유심신규");
-  });
-});
-
-describe("computeUnvisited", () => {
-  it("merges term + keepdate, unsent first then newest expiry first", () => {
+  it("sorts unsent first, then newest expiry first", () => {
     const opens = [
       openRow("010-0001-0001", "24-05-01"), // term expiry 2026-05-01 (older)
-      openRow("010-0002-0002", "24-06-01"), // term expiry 2026-06-01 (newer)
-    ];
-    const pending: PoncleRow[] = [
-      { gubunx: "요금제유지", condx: "접수", pendingdate: "2026-06-20", openphone: "010-0003-0003", name: "K" },
+      openRow("010-0002-0002", "24-06-01"), // term expiry 2026-06-01
+      openRow("010-0003-0003", "26-01-01", { openhowx: "유심신규" }), // 유심 6mo -> 2026-07-01 (newest)
     ];
     const sent = new Set(["010-0002-0002|2026-06-01"]); // 0002 already alerted
-    const out = computeUnvisited(opens, pending, cfg(), TODAY, NONE, sent);
-    // unsent (0001 @2026-05-01, 0003 @2026-06-20) before sent (0002); within unsent, newest expiry first
+    const out = computeUnvisited(opens, cfg(), TODAY, sent);
+    // unsent (0003 @2026-07-01, 0001 @2026-05-01) before sent (0002); newest expiry first within unsent
     expect(out.map((r) => r.phone)).toEqual(["010-0003-0003", "010-0001-0001", "010-0002-0002"]);
     expect(out.find((r) => r.phone === "010-0003-0003")?.source).toBe("keepdate");
   });

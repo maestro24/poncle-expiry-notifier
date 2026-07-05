@@ -44,17 +44,17 @@ describe("buildLookupResults", () => {
       row("010-3333-4444", "24-05-01"), // expiry 2026-05-01 -> 만료 지남
       row("010-5555-6666", "23-01-01"), // old contract...
       row("010-5555-6666", "26-06-01"), // ...re-signed -> latest opendate -> newest
-      row("010-7777-8888", "24-06-01", { openhowx: "번호이동", agencytitle: "무약정처" }), // term 0 -> 무약정
+      row("010-7777-8888", "", { openhowx: "번호이동" }), // empty opendate -> 무약정 (no computable 만료)
     ];
     const sent = new Map([["010-3333-4444|2026-05-01", "2026-04-20T09:00:00"]]);
-    const out = buildLookupResults(rows, cfg({ agency_term_months: { 무약정처: 0 } }), TODAY, WINDOW, sent);
+    const out = buildLookupResults(rows, cfg(), TODAY, WINDOW, sent);
 
-    // Sorted by opendate descending (most recent contract on top).
+    // Sorted by opendate descending (most recent contract on top); empty opendate last.
     expect(out.map((r) => r.phone)).toEqual([
       "010-5555-6666", // 26-06-01 (newest opendate)
       "010-1111-2222", // 24-07-20
-      "010-7777-8888", // 24-06-01
-      "010-3333-4444", // 24-05-01 (oldest)
+      "010-3333-4444", // 24-05-01
+      "010-7777-8888", // "" (무약정, sorts last)
     ]);
     const byPhone = Object.fromEntries(out.map((r) => [r.phone, r]));
     expect(byPhone["010-5555-6666"].status.label).toBe("재계약 완료");

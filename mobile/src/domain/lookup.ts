@@ -10,6 +10,7 @@ import { field } from "./due-item";
 import { computeExpiry } from "./expiry";
 import { normalizePhone } from "./keepdate";
 import { PlainDate, daysBetween, toIso } from "./plaindate";
+import { isContractType } from "./template-match";
 import type { AppConfig, DueItem, PoncleRow } from "./types";
 import { latestOpenByPhone } from "./unvisited";
 
@@ -125,6 +126,8 @@ export function lookupToDueItem(r: LookupResult): DueItem {
     model: r.model,
     staff: r.staff,
     already_sent: !!r.informedAt,
-    source: "term",
+    // 조회에서 발송 시 시점(source)로 템플릿을 고른다: 약정 대상=약정 만료(term/T2),
+    // 유심 등=요금제 유지(keepdate/T1). r.status가 대표 만료(computeExpiry) 기준이라 일치.
+    source: isContractType(r.openhow) ? "term" : "keepdate",
   };
 }

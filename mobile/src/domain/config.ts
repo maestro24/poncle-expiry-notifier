@@ -7,18 +7,17 @@ import { Preferences } from "@capacitor/preferences";
 import type { AppConfig, MessageTemplate } from "./types";
 
 const CONFIG_KEY = "app_config";
-/** One-shot guard so the built-in starter templates are seeded only once. */
-const DEFAULT_TEMPLATES_SEEDED_KEY = "default_templates_seeded_v1";
+/** One-shot guard so the built-in starter templates are seeded only once. Bumped
+ *  to v2 for the 2단계 개편 (retire v1 templates, install source-routed ones). */
+const DEFAULT_TEMPLATES_SEEDED_KEY = "default_templates_seeded_v2";
 
 export const DEFAULTS: AppConfig = {
   poncle_base_url: "https://m.poncle.co.kr",
 
-  // 기변 / 신규            -> default_term_months (표준, 보통 24)
-  // 그 외 (번호이동 / 유심신규 / 유심MNP ...) -> 거래처(agencytitle)마다:
-  //     agency_term_months[<거래처명>] if set, else nonstandard_term_months.
+  // 약정 개월 (2단계): 약정 대상(신규/번호이동/기변)의 약정 만료 = 개통 + 이 개월.
   default_term_months: 24,
-  nonstandard_term_months: 6,
-  agency_term_months: {},
+  // 요금제 유지 기본 개월 (1단계): 폰클에 요금제유지 미결이 없을 때 개통 + 이 개월.
+  keepdate_default_months: 6,
 
   // Days BEFORE expiry to alert on. 0 == the expiry day itself.
   notify_offsets_days: [0],
@@ -48,19 +47,23 @@ export const DEFAULTS: AppConfig = {
   request_timeout_sec: 20,
 };
 
+/** v1 default template ids, retired by the 2단계 개편 (removed on the v2 seed). */
+export const RETIRED_DEFAULT_TEMPLATE_IDS = ["default-usim", "default-newmnp"];
+
 /**
- * Built-in starter templates for 휴대폰 DC마트. Seeded once into a user's config
- * (see seedDefaultTemplates) — NOT part of DEFAULTS.templates, so the user can
- * freely edit/delete them without them reappearing. Bodies use the {customer},
- * {months}, {years} placeholders (see notifier.renderMessage).
+ * Built-in starter templates for 휴대폰 DC마트 (2단계 모델). Seeded once into a
+ * user's config (see seedDefaultTemplates) — NOT part of DEFAULTS.templates, so the
+ * user can freely edit/delete them. Selected by 시점(source): 요금제 유지 시점은
+ * 템플릿1, 약정 만료 시점은 템플릿2. Bodies use {customer}/{months} placeholders
+ * (see notifier.renderMessage).
  */
 export const DEFAULT_TEMPLATES: MessageTemplate[] = [
   {
-    id: "default-usim",
-    name: "유심신규/유심MNP 전용 템플릿",
-    // 통신사 무관 (유심 개통은 2년 약정이 아니라 빅3 포함 여부와 무관). 상태로만 구분.
-    telecoms: [],
-    statuses: ["유심신규", "유심MNP"],
+    id: "default-keepdate",
+    name: "요금제 유지 안내 (1단계)",
+    telecoms: [], // 모든 통신사
+    statuses: [], // 모든 상태 (요금제 유지는 유심/약정 대상 공통)
+    sources: ["keepdate"], // 요금제 유지 시점에만
     body: `안녕하세요 {customer}고객님 😊
 
 {months}개월 전 휴대폰 개통 도와드렸던 경기광주 휴대폰 DC마트입니다.
@@ -85,13 +88,14 @@ export const DEFAULT_TEMPLATES: MessageTemplate[] = [
 http://pf.kakao.com/_xizFan`,
   },
   {
-    id: "default-newmnp",
-    name: "신규/번호이동/기변 전용 템플릿",
-    telecoms: [], // 통신사 상관 없음
-    statuses: ["신규", "번호이동", "기변"],
+    id: "default-term",
+    name: "약정 만료 안내 (2단계)",
+    telecoms: [], // 모든 통신사
+    statuses: ["신규", "번호이동", "기변"], // 약정 대상 (유심은 약정 없음)
+    sources: ["term"], // 약정 만료 시점에만
     body: `안녕하세요 {customer}고객님 😊
 
-{years}년전 휴대폰 개통 도와드렸던 경기광주 휴대폰 DC마트입니다.
+2년전 휴대폰 개통 도와드렸던 경기광주 휴대폰 DC마트입니다.
 
 현재 사용 중이신 약정이 종료되어 안내드립니다.
 
@@ -151,6 +155,9 @@ export function migrate(cfg: Record<string, unknown>): Record<string, unknown> {
   // conditional templates). Dropped on upgrade; staff re-creates templates.
   delete cfg["message_template"];
   delete cfg["message_template_nonstandard"];
+  // Retired in the 2단계 개편: 거래처별 약정 오버라이드 + 비표준 약정 개월.
+  delete cfg["agency_term_months"];
+  delete cfg["nonstandard_term_months"];
   return cfg;
 }
 
@@ -200,8 +207,10 @@ export async function seedDefaultTemplates(): Promise<void> {
   const { value } = await Preferences.get({ key: DEFAULT_TEMPLATES_SEEDED_KEY });
   if (value) return;
   const cfg = await loadConfig();
-  const have = new Set((cfg.templates ?? []).map((t) => t.id));
-  const add = DEFAULT_TEMPLATES.filter((t) => !have.has(t.id));
-  if (add.length) await saveConfig({ ...cfg, templates: [...cfg.templates, ...add] });
+  // Drop the retired v1 defaults + any existing new-default ids (clean replace),
+  // keep the user's own templates, then append the current defaults.
+  const drop = new Set([...RETIRED_DEFAULT_TEMPLATE_IDS, ...DEFAULT_TEMPLATES.map((t) => t.id)]);
+  const kept = (cfg.templates ?? []).filter((t) => !drop.has(t.id));
+  await saveConfig({ ...cfg, templates: [...kept, ...DEFAULT_TEMPLATES] });
   await Preferences.set({ key: DEFAULT_TEMPLATES_SEEDED_KEY, value: "1" });
 }
