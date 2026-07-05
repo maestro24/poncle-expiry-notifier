@@ -1143,6 +1143,8 @@ async function finishOnb(): Promise<void> {
   // The onboarding login step may have just logged in -> re-check session so the
   // home banner clears and a scan runs without a manual tap.
   await refreshHome();
+  // The boot-time update check bailed while onboarding was on screen; run it now.
+  void checkUpdate();
 }
 async function maybeOnboard(): Promise<boolean> {
   const { value } = await Preferences.get({ key: ONB_KEY }).catch(() => ({ value: null }));
@@ -1180,9 +1182,13 @@ function bind(): void {
   $("#btn-test-target").onclick = () => void addTestTarget();
 
   // Returning to the foreground: re-check the session so a stale "세션 만료" banner
-  // clears once the native layer has restored the persisted cookie.
+  // clears once the native layer has restored the persisted cookie, and re-check for
+  // a new app release so the 업데이트 prompt appears during use (both are debounced).
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") void onForeground();
+    if (document.visibilityState === "visible") {
+      void onForeground();
+      void checkUpdate();
+    }
   });
 
   // Home due-list search + filter
@@ -1316,18 +1322,55 @@ function bind(): void {
 }
 
 /* ---------- update ---------- */
+// Checked at boot, on every foreground return, and on a 30-min timer while running,
+// so a new release surfaces the 설치 prompt during use — not only after a restart.
+const UPDATE_POLL_MS = 30 * 60 * 1000; // background poll cadence while foregrounded
+const UPDATE_MIN_GAP_MS = 20 * 60 * 1000; // min gap between actual GitHub checks (rate-limit friendly)
+let lastUpdateCheck = 0; // ms of the last network check (in-memory debounce)
+let updateDismissedVersion = ""; // version the user dismissed — muted THIS session only
+let updateChecking = false; // re-entrancy guard for overlapping triggers
+
+/** True if any overlay (onboarding, confirm-send, picker, no-template, or the
+ *  update modal itself) is currently open. We never pop the update prompt over
+ *  one — it shares the same z-index and would stack. */
+function anyModalOpen(): boolean {
+  return $$(".modal-overlay:not(.hidden)").length > 0;
+}
+
 async function checkUpdate(): Promise<void> {
-  const current = await getAppVersion().catch(() => "");
-  if (!current || current === "0.0.0") return;
-  const info = await checkForUpdate(current);
-  if (!info.available || !info.url) return;
-  $("#upd-current").textContent = "v" + current;
-  $("#upd-latest").textContent = "v" + info.version;
-  $("#upd-notes").textContent = info.notes || "";
-  const modal = $("#update-modal");
-  $("#upd-later").onclick = () => modal.classList.add("hidden");
-  $("#upd-now").onclick = () => { void openExternalUrl(info.url); modal.classList.add("hidden"); };
-  modal.classList.remove("hidden");
+  if (updateChecking) return;
+  if (anyModalOpen()) return; // don't stack over another overlay; a later trigger retries
+  const now = Date.now();
+  if (now - lastUpdateCheck < UPDATE_MIN_GAP_MS) return;
+  updateChecking = true;
+  lastUpdateCheck = now;
+  try {
+    const current = await getAppVersion().catch(() => "");
+    if (!current || current === "0.0.0") return;
+    const info = await checkForUpdate(current);
+    if (!info.available || !info.url) return;
+    // Don't nag: once the user dismisses a version (나중에 OR 업데이트), stay quiet until
+    // a newer one appears (or the app restarts, which re-prompts — prior behavior).
+    if (updateDismissedVersion === info.version) return;
+    // A modal may have opened during the awaits above — re-check before showing.
+    if (anyModalOpen()) return;
+    $("#upd-current").textContent = "v" + current;
+    $("#upd-latest").textContent = "v" + info.version;
+    $("#upd-notes").textContent = info.notes || "";
+    const modal = $("#update-modal");
+    $("#upd-later").onclick = () => {
+      modal.classList.add("hidden");
+      updateDismissedVersion = info.version;
+    };
+    $("#upd-now").onclick = () => {
+      void openExternalUrl(info.url);
+      updateDismissedVersion = info.version; // muted so it won't re-pop mid-download
+      modal.classList.add("hidden");
+    };
+    modal.classList.remove("hidden");
+  } finally {
+    updateChecking = false;
+  }
 }
 
 /** Re-evaluate session + refresh the home banner / scan. */
@@ -1380,6 +1423,9 @@ async function boot(): Promise<void> {
   const onboarding = await maybeOnboard();
   if (!onboarding) await refreshHome();
   void checkUpdate();
+  // Keep checking while the app runs (Android throttles this timer when backgrounded;
+  // the visibilitychange handler covers foreground returns).
+  window.setInterval(() => void checkUpdate(), UPDATE_POLL_MS);
 }
 
 void boot();
