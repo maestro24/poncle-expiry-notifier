@@ -3,10 +3,10 @@
  * Dedup + record: a successful send is recorded into history so the customer is
  * never messaged twice for the same contract (dedup on phone+expiry).
  */
-import { formatWhen } from "./expiry";
+import { formatWhen, monthsSinceOpen } from "./expiry";
 import type { History, SentRecord } from "./history";
 import { renderMessage } from "./notifier";
-import { makeDate } from "./plaindate";
+import { makeDate, today, type PlainDate } from "./plaindate";
 import type { AppConfig, DueItem } from "./types";
 
 export interface SendDeps {
@@ -23,10 +23,19 @@ export interface SendOutcome {
   error?: string;
 }
 
-/** Render a chosen template body for this item (fills {customer}/{when}/... ). */
-export function renderTemplate(item: DueItem, body: string): string {
+/** Render a chosen template body for this item (fills {customer}/{when}/... ).
+ *  {months}/{years} are the open→today elapsed time; `todayD` is injectable for
+ *  tests and defaults to the current local day. {years} rounds to the nearest
+ *  year (과반이 넘으면 올림), so a ~2-year contract reads "2년". */
+export function renderTemplate(item: DueItem, body: string, todayD: PlainDate = today()): string {
   const when = formatWhen(Number(item.milestone_offset || 0), parseIsoDate((item.expiry_date || "").trim()));
-  return renderMessage(body, item, when);
+  const raw = monthsSinceOpen(item.opendate || "", todayD);
+  // Floor to 1 so a today/future/blank opendate never renders "0개월 전 / 0년전"
+  // in a customer message. Real due customers are always many months out, so this
+  // only guards data anomalies. {years} rounds (과반이 넘으면 올림).
+  const months = Math.max(1, raw);
+  const years = Math.max(1, Math.round(raw / 12));
+  return renderMessage(body, item, when, { months, years });
 }
 
 /** A history record shape from a due item (+ the actual message body). */

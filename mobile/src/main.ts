@@ -4,7 +4,7 @@
  */
 import { Preferences } from "@capacitor/preferences";
 import { Share } from "@capacitor/share";
-import { DEFAULTS, loadConfig, saveConfig } from "./domain/config";
+import { DEFAULTS, loadConfig, saveConfig, seedDefaultTemplates } from "./domain/config";
 import { isStandardOpenType, normalizeAgency, resolveTermMonths } from "./domain/expiry";
 import { buildBackup, historyToCsv, parseBackup } from "./domain/export";
 import { History, preferencesKV } from "./domain/history";
@@ -68,6 +68,7 @@ const DDAY_OPTIONS = [30, 14, 7, 3, 1, 0];
 const VARS: Array<[string, string]> = [
   ["고객명", "{customer}"], ["통신사", "{telecom}"], ["모델", "{model}"],
   ["만료일", "{expiry}"], ["개통일", "{opendate}"], ["시점", "{when}"],
+  ["요금제", "{plan}"], ["경과개월", "{months}"], ["경과년수", "{years}"],
 ];
 
 /* ---------- helpers ---------- */
@@ -1421,6 +1422,7 @@ async function onForeground(): Promise<void> {
 /* ---------- boot ---------- */
 async function boot(): Promise<void> {
   bind();
+  await seedDefaultTemplates(); // 기본 템플릿 2종 최초 1회 주입 (이후 수정/삭제 자유)
   CFG = await loadConfig();
   await history.migrateRecontacted(); // v1.1.x 연락완료 -> 제외(handled), one-time
   await loadRecent(); // 조회 최근 검색어

@@ -5,6 +5,7 @@ import {
   dueWithin,
   isStandardOpenType,
   lookAheadDays,
+  monthsSinceOpen,
   parseOpendate,
   resolveTermMonths,
   scanOpenDateBounds,
@@ -203,4 +204,29 @@ describe("all 안내시점 windows (당일/1/3/7/14/30)", () => {
       expect(covered(toIso(addMonths(today, -6)))).toBe(true);
     });
   }
+});
+
+describe("monthsSinceOpen", () => {
+  const TODAY = makeDate(2026, 7, 5);
+  it("counts completed whole months open->today", () => {
+    expect(monthsSinceOpen("24-07-03", TODAY)).toBe(24); // day-of-month reached
+    expect(monthsSinceOpen("24-07-05", TODAY)).toBe(24); // same day
+    expect(monthsSinceOpen("24-11-05", TODAY)).toBe(20); // 1년 8개월
+    expect(monthsSinceOpen("26-07-04", TODAY)).toBe(0); // this month
+  });
+  it("does not count the current month until the day-of-month is reached", () => {
+    expect(monthsSinceOpen("24-07-10", TODAY)).toBe(23); // today day 5 < open day 10
+  });
+  it("returns 0 for unparseable or future opendates", () => {
+    expect(monthsSinceOpen("", TODAY)).toBe(0);
+    expect(monthsSinceOpen("garbage", TODAY)).toBe(0);
+    expect(monthsSinceOpen("27-01-01", TODAY)).toBe(0); // future
+  });
+  it("counts a month-end opendate at the clamped monthiversary (no under-count)", () => {
+    // The open day (31) doesn't exist in the shorter target month, but the clamped
+    // monthiversary has passed, so the month IS completed (matches addMonths clamp).
+    expect(monthsSinceOpen("24-08-31", makeDate(2026, 6, 30))).toBe(22); // not 21
+    expect(monthsSinceOpen("24-01-31", makeDate(2026, 2, 28))).toBe(25); // not 24
+    expect(monthsSinceOpen("23-03-31", makeDate(2024, 9, 30))).toBe(18); // -> {years}=2
+  });
 });

@@ -45,6 +45,26 @@ export function parseOpendate(value: string): PlainDate | null {
   return dt;
 }
 
+/**
+ * Completed whole months from an opendate ("yy-mm-dd") to `today`, for the
+ * {months} / {years} message placeholders (e.g. "{months}개월 전 개통").
+ * The day-of-month is honoured so a not-yet-elapsed month doesn't count. Returns
+ * 0 when the opendate is unparseable or in the future.
+ */
+export function monthsSinceOpen(openIso: string, today: PlainDate): number {
+  const open = parseOpendate(openIso);
+  if (!open) return 0;
+  let m = (today.getFullYear() - open.getFullYear()) * 12 + (today.getMonth() - open.getMonth());
+  // Clamp the open day to today's month length, so a month-end opendate (29/30/31)
+  // whose day doesn't exist in a shorter month still counts once its clamped
+  // monthiversary passes — matching computeExpiry's month-end clamp (addMonths),
+  // e.g. 24-08-31 -> 2026-06-30 is a completed 22 months, not 21.
+  const daysInTodayMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+  const effectiveOpenDay = Math.min(open.getDate(), daysInTodayMonth);
+  if (today.getDate() < effectiveOpenDay) m -= 1; // this month not completed yet
+  return Math.max(0, m);
+}
+
 function field(row: PoncleRow, name: string): string {
   const v = row[name];
   return v == null ? "" : String(v);

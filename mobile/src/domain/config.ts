@@ -4,9 +4,11 @@
  * unit-tested; load/save wrap Capacitor Preferences (async, device-only storage).
  */
 import { Preferences } from "@capacitor/preferences";
-import type { AppConfig } from "./types";
+import type { AppConfig, MessageTemplate } from "./types";
 
 const CONFIG_KEY = "app_config";
+/** One-shot guard so the built-in starter templates are seeded only once. */
+const DEFAULT_TEMPLATES_SEEDED_KEY = "default_templates_seeded_v1";
 
 export const DEFAULTS: AppConfig = {
   poncle_base_url: "https://m.poncle.co.kr",
@@ -45,6 +47,83 @@ export const DEFAULTS: AppConfig = {
   page_size: 100,
   request_timeout_sec: 20,
 };
+
+/**
+ * Built-in starter templates for 휴대폰 DC마트. Seeded once into a user's config
+ * (see seedDefaultTemplates) — NOT part of DEFAULTS.templates, so the user can
+ * freely edit/delete them without them reappearing. Bodies use the {customer},
+ * {months}, {years} placeholders (see notifier.renderMessage).
+ */
+export const DEFAULT_TEMPLATES: MessageTemplate[] = [
+  {
+    id: "default-usim",
+    name: "유심신규/유심MNP 전용 템플릿",
+    // KT / SK텔레콤 / LG유플러스 (main lines) 제외한 나머지 통신사.
+    telecoms: [
+      "U+알뜰모바일",
+      "KT엠모바일",
+      "SK텔링크",
+      "스카이라이프",
+      "기타통신사(KT)",
+      "기타통신사(SKT)",
+      "기타통신사(LGT)",
+    ],
+    statuses: ["유심신규", "유심MNP"],
+    body: `안녕하세요 {customer}고객님 😊
+
+{months}개월 전 휴대폰 개통 도와드렸던 경기광주 휴대폰 DC마트입니다.
+
+현재 이용하고 계신 요금제보다 더 저렴한 요금제로 변경이 가능하여 안내해 드립니다.
+
+더 저렴한 요금제로 변경하여 통신비를 절약하실 수 있으니, 편하신 시간에 매장에 방문하셔서 혜택을 받아보세요.
+
+🎁 방문 고객 특별 혜택
+✔ 더 낮은 요금제 + 데이터 완전무제한 프로모션 변경
+✔ 유심비 전액 서비스
+✔ 필름 무료 교체 부착
+
+방문 시 신분증만 지참해 주시면
+편하게 도와드리겠습니다. 😊
+
+👇 지금 바로 채팅으로 재고 및 상담 문의하기 👇
+📞 친절상담: 010-9595-9505
+🏠 찾아오시는 길: 경기도 광주시 중앙로 91 (역동, 경기광주 CGV 건물 앞 1층) 휴대폰 DC마트!
+
+💬 KakaoTalk: 365dc
+http://pf.kakao.com/_xizFan`,
+  },
+  {
+    id: "default-newmnp",
+    name: "신규/번호이동/기변 전용 템플릿",
+    telecoms: [], // 통신사 상관 없음
+    statuses: ["신규", "번호이동", "기변"],
+    body: `안녕하세요 {customer}고객님 😊
+
+{years}년전 휴대폰 개통 도와드렸던 경기광주 휴대폰 DC마트입니다.
+
+현재 사용 중이신 약정이 종료되어 안내드립니다.
+
+시간 괜찮으실 때 매장 방문해주시면
+✔ 요금제 변경
+✔ 재약정 상담
+편하게 도와드리겠습니다 😊
+
+
+🎁 방문 고객 특별 혜택
+✔ 케이스 무료 교체 서비스
+✔ 필름 무료 교체 부착 서비스
+
+방문 시 신분증만 지참해 주시면
+편하게 도와드리겠습니다. 😊
+
+👇 지금 바로 채팅으로 재고 및 상담 문의하기 👇
+📞 친절상담: 010-9595-9505
+🏠 찾아오시는 길: 경기도 광주시 중앙로 91 (역동, 경기광주 CGV 건물 앞 1층) 휴대폰 DC마트!
+
+💬 KakaoTalk: 365dc
+http://pf.kakao.com/_xizFan`,
+  },
+];
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -116,4 +195,21 @@ export async function updateConfig(patch: Partial<AppConfig>): Promise<AppConfig
   const current = await loadConfig();
   const next = deepMerge(current, patch) as AppConfig;
   return saveConfig(next);
+}
+
+/**
+ * One-time seed of the built-in starter templates (DEFAULT_TEMPLATES) into the
+ * saved config. Guarded by a Preferences flag so it runs once: it appends only
+ * the default ids the user doesn't already have, so existing users get them on
+ * upgrade and fresh installs get them on first launch. After it runs the user
+ * fully controls the templates — edits and deletes are never undone.
+ */
+export async function seedDefaultTemplates(): Promise<void> {
+  const { value } = await Preferences.get({ key: DEFAULT_TEMPLATES_SEEDED_KEY });
+  if (value) return;
+  const cfg = await loadConfig();
+  const have = new Set((cfg.templates ?? []).map((t) => t.id));
+  const add = DEFAULT_TEMPLATES.filter((t) => !have.has(t.id));
+  if (add.length) await saveConfig({ ...cfg, templates: [...cfg.templates, ...add] });
+  await Preferences.set({ key: DEFAULT_TEMPLATES_SEEDED_KEY, value: "1" });
 }

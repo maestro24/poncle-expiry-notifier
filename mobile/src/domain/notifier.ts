@@ -18,12 +18,24 @@ export interface MessageEntry {
   milestone_offset?: number;
 }
 
+/** Derived time-since-open values ({months}/{years}), computed by the caller
+ *  from the opendate + today (kept out of MessageEntry as they aren't row data). */
+export interface RenderExtras {
+  months?: number;
+  years?: number;
+}
+
 /**
  * Fill the message template. Missing placeholders degrade to '' (matches the
  * Python _Safe dict). Placeholders: {customer} {telecom} {model} {expiry}
- * {opendate} {when} {phone} {agency} {plan} {staff} {offset}.
+ * {opendate} {when} {phone} {agency} {plan} {staff} {offset} {months} {years}.
  */
-export function renderMessage(template: string, entry: MessageEntry, when: string): string {
+export function renderMessage(
+  template: string,
+  entry: MessageEntry,
+  when: string,
+  extra: RenderExtras = {},
+): string {
   const values: Record<string, string> = {
     customer: entry.customer ?? "",
     phone: entry.phone ?? "",
@@ -36,6 +48,8 @@ export function renderMessage(template: string, entry: MessageEntry, when: strin
     staff: entry.staff ?? "",
     offset: String(entry.milestone_offset ?? 0),
     when,
+    months: extra.months == null ? "" : String(extra.months),
+    years: extra.years == null ? "" : String(extra.years),
   };
   return String(template ?? "").replace(/\{(\w+)\}/g, (_m, key: string) =>
     Object.prototype.hasOwnProperty.call(values, key) ? values[key] : "",

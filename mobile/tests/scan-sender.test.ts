@@ -262,6 +262,17 @@ describe("sendAlert", () => {
     expect(sendSms).toHaveBeenCalledWith("010-1111-2222", body);
   });
 
+  it("renders {months}/{years} from open->today ({years} rounds; 과반 넘으면 올림)", () => {
+    // opendate 24-07-03 -> today 2026-07-05: 24 months, 2 years
+    expect(renderTemplate(item, "{months}/{years}", makeDate(2026, 7, 5))).toBe("24/2");
+    // 20 months (1년 8개월) -> rounds UP to 2 years
+    expect(renderTemplate({ ...item, opendate: "24-11-05" }, "{years}", makeDate(2026, 7, 5))).toBe("2");
+    // 17 months (1년 5개월) -> rounds DOWN to 1 year
+    expect(renderTemplate({ ...item, opendate: "25-02-05" }, "{years}", makeDate(2026, 7, 5))).toBe("1");
+    // blank/future opendate (elapsed 0) floors to 1 -> never "0개월 전 / 0년전"
+    expect(renderTemplate({ ...item, opendate: "" }, "{months}/{years}", makeDate(2026, 7, 5))).toBe("1/1");
+  });
+
   it("deliver on: SMS failure -> error, not recorded", async () => {
     const history = new History(memKV());
     const sendSms = vi.fn(async () => { throw new Error("permission denied"); });
