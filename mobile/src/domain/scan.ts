@@ -4,12 +4,16 @@
  * (per the configured milestones) and flags which were already alerted. Sending
  * is a separate, explicit per-row action (sender.ts).
  */
-import { candidateOpenDateBounds, dueWithin } from "./expiry";
+import { entryFromRow } from "./due-item";
+import { dueWithin, scanOpenDateBounds } from "./expiry";
 import type { History } from "./history";
 import { keepDueItem, keepDueRows, keepPhoneSet, normalizePhone } from "./keepdate";
 import { NetworkError, PoncleClient, PoncleGateway, SessionExpired } from "./poncle-client";
-import { PlainDate, toIso, today } from "./plaindate";
+import { PlainDate, today } from "./plaindate";
 import type { AppConfig, DueItem, PoncleRow } from "./types";
+import { computeUnvisited } from "./unvisited";
+
+export { entryFromRow } from "./due-item";
 
 export type ScanState = "idle" | "scanning" | "session_expired" | "error";
 
@@ -17,38 +21,19 @@ export interface ScanResult {
   status: "ok" | "session_expired" | "error";
   state: ScanState;
   results: DueItem[];
+  /** 미방문 고객: expired-but-not-returned customers, from the same fetch. */
+  unvisited: DueItem[];
+  /** True when the 미결 fetch degraded to empty (network/native glitch, not logout).
+   *  The due list still stands, but the 미방문 blacklist is missing, so the caller
+   *  must NOT overwrite the persisted 미방문 cache with this scan's list. */
+  pendingDegraded: boolean;
   targets: number;
   sent: number;
   pending: number;
   error?: string;
 }
 
-function field(row: PoncleRow, name: string): string {
-  const v = row[name];
-  return v == null ? "" : String(v).trim();
-}
-
-/** Mirror scan._entry_from_row: raw Poncle row -> a due-list item (id/already_sent
- *  filled by the caller). */
-export function entryFromRow(row: PoncleRow, offset: number, expiry: PlainDate): DueItem {
-  return {
-    id: "",
-    phone: field(row, "openphone"),
-    customer: field(row, "customer"),
-    opendate: field(row, "opendate"),
-    expiry_date: toIso(expiry),
-    milestone_offset: offset,
-    telecom: field(row, "telecomx") || field(row, "telecom"),
-    agency: field(row, "agencytitle"),
-    openhow: field(row, "openhowx"),
-    plan: field(row, "plan"),
-    model: field(row, "model"),
-    staff: field(row, "membername") || field(row, "username"),
-    already_sent: false,
-  };
-}
-
-function errorResult(e: unknown, empty: { results: DueItem[]; targets: number; sent: number; pending: number }): ScanResult | null {
+function errorResult(e: unknown, empty: { results: DueItem[]; unvisited: DueItem[]; pendingDegraded: boolean; targets: number; sent: number; pending: number }): ScanResult | null {
   if (e instanceof SessionExpired) return { status: "session_expired", state: "session_expired", ...empty };
   if (e instanceof NetworkError) return { status: "error", state: "error", error: "네트워크 오류로 스캔에 실패했습니다. 잠시 후 다시 시도하세요.", ...empty };
   return { status: "error", state: "error", error: String(e), ...empty };
@@ -69,7 +54,7 @@ export async function runScan(
   history: History,
   todayD: PlainDate = today(),
 ): Promise<ScanResult> {
-  const empty = { results: [] as DueItem[], targets: 0, sent: 0, pending: 0 };
+  const empty = { results: [] as DueItem[], unvisited: [] as DueItem[], pendingDegraded: false, targets: 0, sent: 0, pending: 0 };
   const client = new PoncleClient(gw, cfg);
 
   // Fetch the 요금제유지 미결 FIRST so the term-pass blacklist is accurate. A real
@@ -77,17 +62,20 @@ export async function runScan(
   // term-only (empty pending) rather than killing the whole scan — that is exactly
   // the pre-유지일 behavior, so a transient pending glitch never blocks scanning.
   let pendingRows: PoncleRow[];
+  let pendingDegraded = false;
   try {
     pendingRows = await client.fetchPending();
   } catch (e) {
     if (e instanceof SessionExpired) return { status: "session_expired", state: "session_expired", ...empty };
     pendingRows = [];
+    pendingDegraded = true; // 미방문 blacklist is now empty -> don't trust/persist unvisited
   }
   const blacklist = keepPhoneSet(pendingRows);
   const keepRows = keepDueRows(pendingRows, cfg, todayD);
 
-  // Open list (pass 2 source; also the cheap join source for pass 1).
-  const bounds = candidateOpenDateBounds(cfg, todayD);
+  // Open list (pass 2 source; the join source for pass 1; and — via the widened
+  // look-back bounds — the 미방문 source). One fetch feeds all three.
+  const bounds = scanOpenDateBounds(cfg, todayD);
   let openRows: PoncleRow[];
   try {
     openRows = await client.fetchCandidates(bounds);
@@ -150,11 +138,16 @@ export async function runScan(
     return a.opendate < b.opendate ? -1 : a.opendate > b.opendate ? 1 : 0;
   });
 
+  // 미방문 고객: expired-but-not-returned, derived from the same widened fetch.
+  const unvisited = computeUnvisited(openRows, pendingRows, cfg, todayD, blacklist, sentKeys);
+
   const sent = results.filter((r) => r.already_sent).length;
   return {
     status: "ok",
     state: "idle",
     results,
+    unvisited,
+    pendingDegraded,
     targets: results.length,
     sent,
     pending: results.length - sent,

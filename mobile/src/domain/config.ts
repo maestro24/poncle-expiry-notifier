@@ -34,6 +34,10 @@ export const DEFAULTS: AppConfig = {
   // records the send into 발송 이력 (staff can track handled customers).
   deliver_alerts: false,
 
+  // 만료 후 매장에 다시 오지 않은 고객(미방문)을 몇 개월까지 추적할지. 기본 6개월.
+  // 이 기간만큼 스캔의 개통일 조회 범위도 과거로 넓혀 최근 만료자를 다시 산출한다.
+  unvisited_lookback_months: 6,
+
   // Scraping efficiency / safety knobs.
   use_server_date_filter: true,
   date_window_days: 3,

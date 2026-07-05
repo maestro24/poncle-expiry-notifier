@@ -9,6 +9,7 @@
  * without touching callers.
  */
 import { Preferences } from "@capacitor/preferences";
+import type { DueItem } from "./types";
 
 export interface SentRecord {
   phone: string;
@@ -25,8 +26,6 @@ export interface SentRecord {
   channel: string; // "sms" | "record-only" | "skipped"
   sent_at: string; // ISO local datetime
   body?: string; // the actual message text sent (empty for skips)
-  /** Follow-up flag for the 미방문 고객 list: staff re-contacted this customer. */
-  recontacted?: boolean;
 }
 
 /** Minimal persistent key/value backend (Preferences in the app). */
@@ -36,6 +35,13 @@ export interface KV {
 }
 
 const KEY = "sent_log";
+/** phone|expiry keys the staff manually marked 방문완료 (visited). Overrides the
+ *  auto-derived 미방문 list for cases Poncle doesn't reflect (handled off-system). */
+const HANDLED_KEY = "unvisited_handled";
+/** Last scan's derived 미방문 list, so the 이력 screen shows it without re-scanning. */
+const CACHE_KEY = "unvisited_cache";
+/** One-shot guard so the v1.1.x 연락완료 -> handled migration runs only once. */
+const MIGRATED_KEY = "unvisited_handled_migrated";
 
 // Dedup identifies a customer's contract by phone + expiry date. Offset (days
 // until expiry) is deliberately NOT part of the key: in the range scan model it
@@ -129,31 +135,74 @@ export class History {
     return task;
   }
 
-  /**
-   * 미방문 고객: customers who were actually alerted (channel != skipped) and
-   * whose contract expiry has already passed (expiry_date < todayIso) but whose
-   * store visit isn't confirmed yet. Newest expiry first (smallest D+ on top).
-   */
-  async unvisited(todayIso: string): Promise<SentRecord[]> {
-    const rows = await this.all();
-    return rows
-      .filter((r) => r.channel !== "skipped" && r.expiry_date && r.expiry_date < todayIso)
-      .sort((a, b) => (a.expiry_date < b.expiry_date ? 1 : a.expiry_date > b.expiry_date ? -1 : 0));
+  /** Cache the last scan's derived 미방문 list (full overwrite). Serialized. */
+  async cacheUnvisited(rows: DueItem[]): Promise<void> {
+    const task = this.lock.then(() =>
+      this.kv.set(CACHE_KEY, JSON.stringify(Array.isArray(rows) ? rows : [])),
+    );
+    this.lock = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    return task;
   }
 
-  /** Mark the follow-up state (재연락 표시 / 연락완료) for a customer. Serialized. */
-  async setRecontacted(phone: string, expiry: string, val: boolean): Promise<void> {
+  /** Read the cached 미방문 list from the last scan (empty until first scan). */
+  async loadUnvisited(): Promise<DueItem[]> {
+    const raw = await this.kv.get(CACHE_KEY);
+    if (!raw) return [];
+    try {
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? (arr as DueItem[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * One-time upgrade from v1.1.x: fold the retired `recontacted` flag (the old
+   * 연락완료 dismissal on sent_log rows) into the new handled set, so customers a
+   * user already marked handled don't re-surface in the 미방문 list. Idempotent.
+   */
+  async migrateRecontacted(): Promise<void> {
+    if (await this.kv.get(MIGRATED_KEY)) return;
+    const task = this.lock.then(async () => {
+      const rows = (await this.all()) as Array<SentRecord & { recontacted?: boolean }>;
+      const legacy = rows.filter((r) => r.recontacted === true);
+      if (legacy.length) {
+        const keys = await this.handledKeys();
+        for (const r of legacy) keys.add(dedupKey(r.phone, r.expiry_date));
+        await this.kv.set(HANDLED_KEY, JSON.stringify(Array.from(keys)));
+      }
+      await this.kv.set(MIGRATED_KEY, "1");
+    });
+    this.lock = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    return task;
+  }
+
+  /** phone|expiry keys the staff manually marked 방문완료 (visited). */
+  async handledKeys(): Promise<Set<string>> {
+    const raw = await this.kv.get(HANDLED_KEY);
+    if (!raw) return new Set();
+    try {
+      const arr = JSON.parse(raw);
+      return new Set(Array.isArray(arr) ? (arr as string[]) : []);
+    } catch {
+      return new Set();
+    }
+  }
+
+  /** Toggle the manual 방문완료 flag for a customer (phone|expiry). Serialized. */
+  async setHandled(phone: string, expiry: string, val: boolean): Promise<void> {
     const key = dedupKey(phone, expiry);
     const task = this.lock.then(async () => {
-      const rows = await this.all();
-      let changed = false;
-      for (const r of rows) {
-        if (dedupKey(r.phone, r.expiry_date) === key) {
-          r.recontacted = val;
-          changed = true;
-        }
-      }
-      if (changed) await this.writeAll(rows);
+      const keys = await this.handledKeys();
+      if (val) keys.add(key);
+      else keys.delete(key);
+      await this.kv.set(HANDLED_KEY, JSON.stringify(Array.from(keys)));
     });
     this.lock = task.then(
       () => undefined,

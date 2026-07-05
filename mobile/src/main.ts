@@ -7,7 +7,7 @@ import { Share } from "@capacitor/share";
 import { DEFAULTS, loadConfig, saveConfig } from "./domain/config";
 import { isStandardOpenType, normalizeAgency, resolveTermMonths } from "./domain/expiry";
 import { buildBackup, historyToCsv, parseBackup } from "./domain/export";
-import { History, preferencesKV, type SentRecord } from "./domain/history";
+import { History, preferencesKV } from "./domain/history";
 import { runScan, type ScanState } from "./domain/scan";
 import { renderTemplate, sendAlert } from "./domain/sender";
 import { conditionSummary, matchingTemplates } from "./domain/template-match";
@@ -370,6 +370,9 @@ async function doScan(): Promise<void> {
     }
     showBanner("none");
     RESULTS = res.results;
+    // 미결 조회가 저하(빈 블랙리스트)된 스캔이면 미방문 캐시를 덮어쓰지 않는다 —
+    // 그대로 두면 이전 정상 스캔 결과가 유지된다. 정상 스캔에서만 갱신.
+    if (!res.pendingDegraded) await history.cacheUnvisited(res.unvisited);
     renderDueList();
     renderState("idle");
   } finally {
@@ -404,8 +407,12 @@ function daysSince(expiryIso: string, todayIso: string): number {
 
 /** Entry point for the 이력 screen: refresh the tab badge and render the active tab. */
 async function loadHistory(): Promise<void> {
-  const unv = await history.unvisited(todayIsoLocal());
-  const need = unv.filter((r) => !r.recontacted).length;
+  // 미방문 목록은 마지막 스캔이 폰클에서 산출해 캐시한 것 + 직원이 수동으로 방문완료
+  // 표시한(handled) 건 제외. 재방문(새 개통) 건은 다음 스캔에서 자동으로 빠진다.
+  const cached = await history.loadUnvisited();
+  const handled = await history.handledKeys();
+  const unv = cached.filter((r) => !handled.has(r.id));
+  const need = unv.length;
   const badge = $("#hist-unvisited-count");
   badge.textContent = String(need);
   badge.classList.toggle("hidden", need === 0);
@@ -444,47 +451,52 @@ async function renderSentHistory(): Promise<void> {
   }
 }
 
-function renderUnvisited(rows: SentRecord[]): void {
+function renderUnvisited(rows: DueItem[]): void {
   const list = $("#u-list");
   $("#u-empty").classList.toggle("hidden", rows.length > 0);
   list.innerHTML = "";
   const today = todayIsoLocal();
   for (const r of rows) {
     const dplus = daysSince(r.expiry_date, today);
+    const kind = r.source === "keepdate" ? "요금제 유지일" : "약정 만료";
+    const meta = [esc(r.telecom) || "통신사 미상", esc(r.model)].filter(Boolean).join(" · ");
     const el = document.createElement("div");
     el.className = "listcard";
     el.innerHTML = `
       <div class="lc-top">
         <span class="lc-name">${esc(r.customer) || "-"}</span>
+        <span class="u-tag ${r.already_sent ? "tag-sent" : "tag-miss"}">${r.already_sent ? "안내함" : "미발송"}</span>
         <span class="lc-dday plus">D+${dplus}</span>
       </div>
       <div class="lc-phone u-phone">${esc(r.phone)}</div>
-      <div class="lc-meta">만료 ${esc(r.expiry_date)} · 안내발송 ${esc(r.sent_at.slice(0, 10))}</div>
+      <div class="lc-meta">${kind} ${esc(r.expiry_date)}${meta ? " · " + meta : ""}</div>
       <div class="u-act"></div>`;
     const act = el.querySelector(".u-act") as HTMLElement;
-    if (r.recontacted) {
-      const done = document.createElement("span");
-      done.className = "done-badge";
-      done.textContent = "연락완료";
-      act.appendChild(done);
-    } else {
-      const btn = document.createElement("button");
-      btn.className = "btn-recontact";
-      btn.textContent = "재연락 표시";
-      btn.onclick = () => void markRecontacted(r);
-      act.appendChild(btn);
-    }
+    const call = document.createElement("button");
+    call.className = "btn-call";
+    call.textContent = "통화";
+    call.title = "이 번호로 전화 걸기";
+    call.onclick = () => void onCall(r);
+    const done = document.createElement("button");
+    done.className = "btn-recontact";
+    done.textContent = "방문완료 표시";
+    done.title = "이 고객을 미방문 목록에서 제외";
+    done.onclick = () => void markVisited(r);
+    act.appendChild(call);
+    act.appendChild(done);
     list.appendChild(el);
   }
 }
 
-async function markRecontacted(r: SentRecord): Promise<void> {
-  await history.setRecontacted(r.phone, r.expiry_date, true);
+/** Manually drop a customer from the 미방문 list (handled off-system / won't return).
+ *  Auto-detected returns already fall off on the next scan; this is the override. */
+async function markVisited(r: DueItem): Promise<void> {
+  await history.setHandled(r.phone, r.expiry_date, true);
   await loadHistory();
-  toast("연락완료로 표시했습니다", {
+  toast("방문완료로 표시했습니다", {
     undo: () => {
       void (async () => {
-        await history.setRecontacted(r.phone, r.expiry_date, false);
+        await history.setHandled(r.phone, r.expiry_date, false);
         await loadHistory();
       })();
     },
@@ -583,11 +595,14 @@ async function saveSettingsNow(): Promise<void> {
 function populateTerms(): void {
   $<HTMLInputElement>("#s-standard-term").value = String(CFG.default_term_months ?? 24);
   $<HTMLInputElement>("#s-nonstandard-term").value = String(CFG.nonstandard_term_months ?? 6);
+  $<HTMLInputElement>("#s-unvisited-lookback").value = String(CFG.unvisited_lookback_months ?? 6);
   buildAgencyTerms();
 }
 function gatherTerms(): Partial<AppConfig> {
   const nonstandard = parseInt($<HTMLInputElement>("#s-nonstandard-term").value, 10);
   const nonstandardTerm = Number.isFinite(nonstandard) ? nonstandard : 6;
+  const lookbackRaw = parseInt($<HTMLInputElement>("#s-unvisited-lookback").value, 10);
+  const lookback = Number.isFinite(lookbackRaw) ? Math.max(0, Math.min(36, lookbackRaw)) : 6;
   const agencyTerms: Record<string, number> = {};
   $$(".agency-term").forEach((inp) => {
     const v = parseInt((inp as HTMLInputElement).value, 10);
@@ -597,6 +612,7 @@ function gatherTerms(): Partial<AppConfig> {
   return {
     default_term_months: parseInt($<HTMLInputElement>("#s-standard-term").value, 10) || 24,
     nonstandard_term_months: nonstandardTerm,
+    unvisited_lookback_months: lookback,
     agency_term_months: agencyTerms,
   };
 }
@@ -952,6 +968,7 @@ async function refreshHome(): Promise<void> {
 async function boot(): Promise<void> {
   bind();
   CFG = await loadConfig();
+  await history.migrateRecontacted(); // v1.1.x 연락완료 -> 방문완료(handled), one-time
   renderState("idle");
   // Onboarding first-run gates the session check: finishOnb() calls refreshHome()
   // after the login step, so we don't show the login banner over a fresh login.

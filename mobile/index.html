@@ -100,9 +100,9 @@
       </div>
 
       <div id="hist-unvisited" class="hidden">
-        <div class="hist-sub">만료 안내는 발송했지만 아직 매장 방문(재계약·기변)이 확인되지 않은 고객입니다.</div>
+        <div class="hist-sub">만료됐지만 아직 매장에 다시 방문(재계약·번호이동·기변)하지 않은 고객입니다. 안내 발송 여부와 무관하게 뜨며, 폰클에 새 개통이 잡히면 다음 스캔에서 자동으로 사라집니다.</div>
         <div id="u-list" class="list"></div>
-        <div class="empty hidden" id="u-empty">미방문 고객이 없습니다</div>
+        <div class="empty hidden" id="u-empty">스캔하면 미방문 고객이 여기 표시됩니다</div>
       </div>
     </div>
   </section>
@@ -225,6 +225,14 @@
         <div class="setcard-title">거래처별 예외</div>
         <div class="setcard-sub">개월 수를 다르게 쓰는 거래처만 조정 <span class="muted">(0 = 알림 제외)</span></div>
         <div id="agency-terms" class="ex-list"></div>
+      </div>
+      <div class="setcard">
+        <div class="setcard-title">미방문 추적 기간</div>
+        <div class="setcard-sub">만료 후 매장에 다시 오지 않은 고객을 몇 개월까지 “미방문 고객”으로 볼지 <span class="muted">(0 = 사용 안 함)</span></div>
+        <div class="row-between">
+          <span>만료 후</span>
+          <span class="num-wrap"><input type="number" id="s-unvisited-lookback" min="0" max="36" /><em>개월</em></span>
+        </div>
       </div>
     </div>
   </section>

@@ -7,6 +7,8 @@ import {
   lookAheadDays,
   parseOpendate,
   resolveTermMonths,
+  scanOpenDateBounds,
+  unvisitedFloor,
 } from "../src/domain/expiry";
 import { DEFAULTS } from "../src/domain/config";
 import { addDays, addMonths, makeDate, toIso } from "../src/domain/plaindate";
@@ -137,6 +139,29 @@ describe("candidateOpenDateBounds", () => {
     const b = candidateOpenDateBounds(c, makeDate(2026, 7, 4));
     // maxTerm now 36 -> oldest opendate ~ 2023-07-04
     expect(b.sdate <= "2023-07-04").toBe(true);
+  });
+});
+
+describe("scanOpenDateBounds (미방문 look-back)", () => {
+  const today = makeDate(2026, 7, 3); // floor at 6 months = 2026-01-03
+  it("extends the UPPER bound to >= today so re-activation rows are fetched (auto-clear)", () => {
+    // Default window 0, minTerm 6 -> due-only edate is ~6 months in the past; the
+    // 미방문 scan MUST still reach opendate==today or returning customers never clear.
+    const b = scanOpenDateBounds(cfg(), today);
+    expect(b.edate >= "2026-07-03").toBe(true);
+    // and still reaches back far enough for a 24-month contract expired ~6 months ago
+    expect(b.sdate <= "2024-01-03").toBe(true);
+  });
+  it("due-only candidateOpenDateBounds is unchanged — upper stays in the past", () => {
+    expect(candidateOpenDateBounds(cfg(), today).edate < "2026-07-03").toBe(true);
+  });
+  it("lookback 0 disables widening -> equals the due-only bounds", () => {
+    const c = cfg({ unvisited_lookback_months: 0 });
+    expect(scanOpenDateBounds(c, today)).toEqual(candidateOpenDateBounds(c, today));
+  });
+  it("unvisitedFloor is today minus the configured months", () => {
+    expect(toIso(unvisitedFloor(cfg(), today))).toBe("2026-01-03");
+    expect(toIso(unvisitedFloor(cfg({ unvisited_lookback_months: 3 }), today))).toBe("2026-04-03");
   });
 });
 

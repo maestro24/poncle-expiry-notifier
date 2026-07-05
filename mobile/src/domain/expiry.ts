@@ -152,25 +152,65 @@ export function dueWithin(
 }
 
 /**
- * Open-date bounds (inclusive ISO) whose expiries could fall in [today,
- * today+window], used to narrow the server date filter. A buffer absorbs the
- * month-clamp inverse error; the client re-checks each row exactly with
- * dueWithin, so this only affects fetch breadth, never correctness.
+ * Open-date bounds (inclusive ISO) whose expiries could fall in [today - extra
+ * months, today + window], used to narrow the server date filter. A buffer
+ * absorbs the month-clamp inverse error; the client re-checks each row exactly
+ * (dueWithin / unvisited), so this only affects fetch breadth, never correctness.
+ *
+ * `extraLookbackMonths` widens the lower bound so already-expired customers
+ * (the 미방문 list) are also fetched; 0 keeps the classic due-only breadth.
  */
-export function candidateOpenDateBounds(
+function openDateBounds(
   config: AppConfig,
   todayD: PlainDate,
+  extraLookbackMonths: number,
 ): { sdate: string; edate: string } {
   const terms = positiveTerms(config);
   const maxTerm = terms.length ? Math.max(...terms) : 1;
   const minTerm = terms.length ? Math.min(...terms) : 1;
   const window = lookAheadDays(config);
   const buffer = Math.max(0, toInt(config.date_window_days, 3));
-  // expiry = today   -> opendate = today - term        (oldest at the max term)
-  // expiry = today+W -> opendate = (today+W) - term    (newest at the min term)
-  const minOpen = addDays(addMonths(todayD, -maxTerm), -buffer);
-  const maxOpen = addDays(addMonths(addDays(todayD, window), -minTerm), buffer);
+  const extra = Math.max(0, extraLookbackMonths);
+  // expiry = today - extra -> opendate = today - term - extra (oldest we still fetch)
+  const minOpen = addDays(addMonths(todayD, -maxTerm - extra), -buffer);
+  // Due upper: newest opendate whose expiry reaches the window edge (usually months
+  // in the PAST). But when 미방문 tracking is on (extra > 0) we must ALSO fetch
+  // re-activation rows — a returning customer's new 개통 has opendate up to today —
+  // so latestOpenByPhone sees the return and auto-clears them. Extend to today.
+  const dueUpper = addMonths(addDays(todayD, window), -minTerm);
+  const upper = extra > 0 && dueUpper.getTime() < todayD.getTime() ? todayD : dueUpper;
+  const maxOpen = addDays(upper, buffer);
   return { sdate: toIso(minOpen), edate: toIso(maxOpen) };
+}
+
+/** Bounds for the classic due window only (expiry in [today, today+window]). */
+export function candidateOpenDateBounds(
+  config: AppConfig,
+  todayD: PlainDate,
+): { sdate: string; edate: string } {
+  return openDateBounds(config, todayD, 0);
+}
+
+/**
+ * Bounds for a full scan that also covers recently-expired customers, so the
+ * same fetch feeds both the due list and the 미방문 list. Extends the lower
+ * bound back by unvisited_lookback_months.
+ */
+export function scanOpenDateBounds(
+  config: AppConfig,
+  todayD: PlainDate,
+): { sdate: string; edate: string } {
+  return openDateBounds(config, todayD, unvisitedLookbackMonths(config));
+}
+
+/** Configured 미방문 tracking horizon in months (>= 0). */
+export function unvisitedLookbackMonths(config: AppConfig): number {
+  return Math.max(0, toInt(config.unvisited_lookback_months, 6));
+}
+
+/** Earliest expiry still counted as 미방문: today - unvisited_lookback_months. */
+export function unvisitedFloor(config: AppConfig, todayD: PlainDate): PlainDate {
+  return addMonths(todayD, -unvisitedLookbackMonths(config));
 }
 
 /** Human phrase for the alert text, e.g. '오늘 2026-06-15' / 'D-7 (2026-06-15)'. */

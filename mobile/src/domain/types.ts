@@ -56,6 +56,10 @@ export interface AppConfig {
   use_server_date_filter: boolean;
   date_window_days: number;
   scan_lookback_months: number;
+  /** How many months past expiry a customer stays in the 미방문 고객 list before
+   *  aging out. Also widens the scan's open-date fetch so recently-expired
+   *  customers are re-derived. 0 disables 미방문 tracking. */
+  unvisited_lookback_months: number;
   page_size: number;
   request_timeout_sec: number;
 }
