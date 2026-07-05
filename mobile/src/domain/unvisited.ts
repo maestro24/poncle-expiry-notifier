@@ -113,7 +113,7 @@ export function keepUnvisited(
 /**
  * The full 미방문 list from one scan's rows: term + keepdate passes merged by
  * phone|expiry (keepdate wins), unsent first, then most-recently-expired first.
- * Manual "방문완료" overrides are applied by the caller (History.handledKeys).
+ * Manual 제외(exclude) overrides are applied by the caller (History.handledKeys).
  */
 export function computeUnvisited(
   openRows: PoncleRow[],

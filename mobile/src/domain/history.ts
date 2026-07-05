@@ -35,8 +35,9 @@ export interface KV {
 }
 
 const KEY = "sent_log";
-/** phone|expiry keys the staff manually marked 방문완료 (visited). Overrides the
- *  auto-derived 미방문 list for cases Poncle doesn't reflect (handled off-system). */
+/** phone|expiry keys the staff manually EXCLUDED (제외) from the 미방문 list.
+ *  Real returns auto-clear via a new 개통; this override is only for cases Poncle
+ *  won't reflect. (Key kept as "unvisited_handled" to preserve v1.2.1 data.) */
 const HANDLED_KEY = "unvisited_handled";
 /** Last scan's derived 미방문 list, so the 이력 screen shows it without re-scanning. */
 const CACHE_KEY = "unvisited_cache";
@@ -183,7 +184,7 @@ export class History {
     return task;
   }
 
-  /** phone|expiry keys the staff manually marked 방문완료 (visited). */
+  /** phone|expiry keys the staff manually 제외(excluded) from the 미방문 list. */
   async handledKeys(): Promise<Set<string>> {
     const raw = await this.kv.get(HANDLED_KEY);
     if (!raw) return new Set();
@@ -195,7 +196,7 @@ export class History {
     }
   }
 
-  /** Toggle the manual 방문완료 flag for a customer (phone|expiry). Serialized. */
+  /** Toggle the manual 제외(exclude) flag for a customer (phone|expiry). Serialized. */
   async setHandled(phone: string, expiry: string, val: boolean): Promise<void> {
     const key = dedupKey(phone, expiry);
     const task = this.lock.then(async () => {

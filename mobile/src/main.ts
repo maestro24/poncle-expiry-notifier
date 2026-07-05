@@ -37,6 +37,7 @@ let LAST_SCAN = "";
 let DUE_QUERY = "";
 let DUE_FILTER: "all" | "unsent" = "all";
 let HIST_TAB: "sent" | "unvisited" = "sent";
+let UNV_SHOW_EXCLUDED = false; // 미방문 탭: 수동 제외한 고객도 함께 볼지
 
 const AGENCIES = [
   "CD대리점", "DMB 엘지", "M&S분당도매센터", "MCC - 스테이지파이브SK", "MCC- SK텔링크",
@@ -229,10 +230,12 @@ function actionEl(item: DueItem): HTMLElement {
   return row;
 }
 
-/** After a send/skip, flip the row to its 'handled' state in place. */
+/** After a send/skip, flip the row to its 'handled' state and refresh the list
+ *  the send came from (home due list, or the 미방문 tab). */
 function markHandled(item: DueItem): void {
   item.already_sent = true;
-  renderDueList();
+  if (CURRENT === "history") void loadHistory(); // 미방문 탭에서 보낸 경우: 안내함으로 갱신
+  else renderDueList();
 }
 
 async function onSend(item: DueItem, _btn: HTMLButtonElement): Promise<void> {
@@ -407,20 +410,24 @@ function daysSince(expiryIso: string, todayIso: string): number {
 
 /** Entry point for the 이력 screen: refresh the tab badge and render the active tab. */
 async function loadHistory(): Promise<void> {
-  // 미방문 목록은 마지막 스캔이 폰클에서 산출해 캐시한 것 + 직원이 수동으로 방문완료
-  // 표시한(handled) 건 제외. 재방문(새 개통) 건은 다음 스캔에서 자동으로 빠진다.
+  // 미방문 목록은 마지막 스캔이 폰클에서 산출해 캐시한 것. 발송 여부(already_sent)는
+  // 스캔 이후 바뀔 수 있어 이력에서 실시간 재계산한다. 수동 제외한 건은 기본 숨김이며,
+  // "제외한 고객도 보기" 토글로 다시 볼 수 있다. 실제 재방문(새 개통) 건은 다음
+  // 스캔에서 자동으로 빠진다 — 제외는 폰클에 안 잡히는 예외를 손으로 뺄 때만 쓴다.
   const cached = await history.loadUnvisited();
-  const handled = await history.handledKeys();
-  const unv = cached.filter((r) => !handled.has(r.id));
-  const need = unv.length;
+  const excluded = await history.handledKeys();
+  const sentKeys = await history.dedupKeySet();
+  const enriched = cached.map((r) => ({ ...r, already_sent: sentKeys.has(r.id) }));
+  const outstanding = enriched.filter((r) => !excluded.has(r.id));
+  const need = outstanding.length; // 배지는 '실제 미방문'(제외 항목 제외) 수
   const badge = $("#hist-unvisited-count");
   badge.textContent = String(need);
   badge.classList.toggle("hidden", need === 0);
   $("#hist-sent").classList.toggle("hidden", HIST_TAB !== "sent");
   $("#hist-unvisited").classList.toggle("hidden", HIST_TAB !== "unvisited");
   $$("#hist-tabs .histtab").forEach((b) => b.classList.toggle("on", b.dataset.htab === HIST_TAB));
-  if (HIST_TAB === "sent") await renderSentHistory();
-  else renderUnvisited(unv);
+  if (HIST_TAB === "sent") { await renderSentHistory(); return; }
+  renderUnvisited(UNV_SHOW_EXCLUDED ? enriched : outstanding, excluded);
 }
 
 async function renderSentHistory(): Promise<void> {
@@ -451,7 +458,17 @@ async function renderSentHistory(): Promise<void> {
   }
 }
 
-function renderUnvisited(rows: DueItem[]): void {
+/** A 통화 button for a 미방문 card (opens the dialer for this number). */
+function unvisitedCallButton(item: DueItem): HTMLButtonElement {
+  const call = document.createElement("button");
+  call.className = "btn-call";
+  call.textContent = "통화";
+  call.title = "이 번호로 전화 걸기";
+  call.onclick = () => void onCall(item);
+  return call;
+}
+
+function renderUnvisited(rows: DueItem[], excluded: Set<string>): void {
   const list = $("#u-list");
   $("#u-empty").classList.toggle("hidden", rows.length > 0);
   list.innerHTML = "";
@@ -460,40 +477,57 @@ function renderUnvisited(rows: DueItem[]): void {
     const dplus = daysSince(r.expiry_date, today);
     const kind = r.source === "keepdate" ? "요금제 유지일" : "약정 만료";
     const meta = [esc(r.telecom) || "통신사 미상", esc(r.model)].filter(Boolean).join(" · ");
+    const isExcluded = excluded.has(r.id);
+    const statusTag = isExcluded
+      ? `<span class="u-tag tag-done">제외됨</span>`
+      : `<span class="u-tag ${r.already_sent ? "tag-sent" : "tag-miss"}">${r.already_sent ? "안내함" : "미발송"}</span>`;
     const el = document.createElement("div");
-    el.className = "listcard";
+    el.className = "listcard" + (isExcluded ? " u-handled" : "");
     el.innerHTML = `
       <div class="lc-top">
         <span class="lc-name">${esc(r.customer) || "-"}</span>
-        <span class="u-tag ${r.already_sent ? "tag-sent" : "tag-miss"}">${r.already_sent ? "안내함" : "미발송"}</span>
+        ${statusTag}
         <span class="lc-dday plus">D+${dplus}</span>
       </div>
       <div class="lc-phone u-phone">${esc(r.phone)}</div>
       <div class="lc-meta">${kind} ${esc(r.expiry_date)}${meta ? " · " + meta : ""}</div>
       <div class="u-act"></div>`;
     const act = el.querySelector(".u-act") as HTMLElement;
-    const call = document.createElement("button");
-    call.className = "btn-call";
-    call.textContent = "통화";
-    call.title = "이 번호로 전화 걸기";
-    call.onclick = () => void onCall(r);
-    const done = document.createElement("button");
-    done.className = "btn-recontact";
-    done.textContent = "방문완료 표시";
-    done.title = "이 고객을 미방문 목록에서 제외";
-    done.onclick = () => void markVisited(r);
-    act.appendChild(call);
-    act.appendChild(done);
+    if (isExcluded) {
+      // 제외된 건: 통화 + 제외 해제(다시 미방문 목록으로)
+      act.appendChild(unvisitedCallButton(r));
+      const back = document.createElement("button");
+      back.className = "btn-recontact ghost";
+      back.textContent = "제외 해제";
+      back.onclick = () => void unexcludeUnvisited(r);
+      act.appendChild(back);
+    } else {
+      // 아직 안내 안 한 고객만 발송 버튼(홈과 동일: 발송한 건은 배지만) — 알림 보내기 · 통화 · 제외
+      if (!r.already_sent) {
+        const send = document.createElement("button");
+        send.className = "btn-send";
+        send.textContent = "알림 보내기";
+        send.onclick = () => void onSend(r, send);
+        act.appendChild(send);
+      }
+      act.appendChild(unvisitedCallButton(r));
+      const done = document.createElement("button");
+      done.className = "btn-recontact";
+      done.textContent = "제외";
+      done.title = "이 고객을 미방문 목록에서 빼기 (폰클에 안 잡히는 예외용)";
+      done.onclick = () => void excludeUnvisited(r);
+      act.appendChild(done);
+    }
     list.appendChild(el);
   }
 }
 
-/** Manually drop a customer from the 미방문 list (handled off-system / won't return).
- *  Auto-detected returns already fall off on the next scan; this is the override. */
-async function markVisited(r: DueItem): Promise<void> {
+/** Manually drop a customer from the 미방문 list. Real returns auto-clear on the
+ *  next scan (a new 개통 appears); this is only for cases Poncle won't reflect. */
+async function excludeUnvisited(r: DueItem): Promise<void> {
   await history.setHandled(r.phone, r.expiry_date, true);
   await loadHistory();
-  toast("방문완료로 표시했습니다", {
+  toast("미방문 목록에서 제외했습니다", {
     undo: () => {
       void (async () => {
         await history.setHandled(r.phone, r.expiry_date, false);
@@ -501,6 +535,13 @@ async function markVisited(r: DueItem): Promise<void> {
       })();
     },
   });
+}
+
+/** Bring an excluded customer back into the 미방문 list. */
+async function unexcludeUnvisited(r: DueItem): Promise<void> {
+  await history.setHandled(r.phone, r.expiry_date, false);
+  await loadHistory();
+  toast("제외를 해제했습니다");
 }
 
 /* ---------- settings ---------- */
@@ -862,6 +903,11 @@ function bind(): void {
   $("#h-query").addEventListener("input", () => void loadHistory());
   $("#h-start").addEventListener("change", () => void loadHistory());
   $("#h-end").addEventListener("change", () => void loadHistory());
+  // 미방문 탭: 제외한 고객도 보기 토글
+  $<HTMLInputElement>("#u-show-excluded").addEventListener("change", (e) => {
+    UNV_SHOW_EXCLUDED = (e.target as HTMLInputElement).checked;
+    void loadHistory();
+  });
 
   // Settings
   $("#s-deliver").onclick = async () => {
@@ -968,7 +1014,7 @@ async function refreshHome(): Promise<void> {
 async function boot(): Promise<void> {
   bind();
   CFG = await loadConfig();
-  await history.migrateRecontacted(); // v1.1.x 연락완료 -> 방문완료(handled), one-time
+  await history.migrateRecontacted(); // v1.1.x 연락완료 -> 제외(handled), one-time
   renderState("idle");
   // Onboarding first-run gates the session check: finishOnb() calls refreshHome()
   // after the login step, so we don't show the login banner over a fresh login.
