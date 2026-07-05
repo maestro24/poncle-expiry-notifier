@@ -219,10 +219,10 @@
           <button class="btn-soft" id="btn-export-csv">이력 CSV</button>
           <button class="btn-soft" id="btn-export-backup">백업 내보내기</button>
         </div>
-        <label style="display:block;margin-top:10px;font-size:12px;color:var(--muted)">복원: 백업 내용을 붙여넣고 복원</label>
-        <textarea id="restore-text" class="template-area" rows="2" placeholder="백업 JSON 붙여넣기" style="margin-top:6px"></textarea>
+        <label style="display:block;margin-top:10px;font-size:12px;color:var(--muted)">복원: 저장해 둔 백업 파일(.json)을 가져옵니다</label>
+        <input type="file" id="restore-file" accept="application/json,.json" hidden>
         <div class="btnrow">
-          <button class="btn-dark" id="btn-restore">복원</button>
+          <button class="btn-dark" id="btn-restore-file">백업 파일 가져오기</button>
           <span class="save-msg" id="backup-msg"></span>
         </div>
       </div>

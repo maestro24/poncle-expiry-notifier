@@ -4,6 +4,7 @@
  */
 import { Preferences } from "@capacitor/preferences";
 import { Share } from "@capacitor/share";
+import { Directory, Encoding, Filesystem } from "@capacitor/filesystem";
 import { DEFAULTS, loadConfig, saveConfig, seedDefaultTemplates } from "./domain/config";
 import { buildBackup, historyToCsv, parseBackup } from "./domain/export";
 import { History, preferencesKV, type SentRecord } from "./domain/history";
@@ -502,13 +503,27 @@ async function renderSentHistory(): Promise<void> {
     const el = document.createElement("div");
     el.className = "listcard";
     const [tagCls, tagTxt] = tag[r.channel] ?? ["tag-rec", r.channel];
+    const hasBody = !!r.body;
+    // 카드 헤더/메타는 lc-tap 안에 두고 탭하면 아래로 보낸 문자 원문이 펼쳐진다(다시 탭하면 접힘).
     el.innerHTML = `
-      <div class="lc-top"><span class="lc-name">${esc(r.customer) || "-"}</span>
-        <span class="lc-phone">${esc(r.phone)}</span>
-        <span class="lc-tag ${tagCls}">${tagTxt}</span></div>
-      <div class="lc-meta">개통 ${esc(r.opendate)} · 만료 ${esc(r.expiry_date)} · 처리 ${esc(r.sent_at.replace("T", " ").slice(0, 16))}<br>
-        ${esc(r.agency)} · ${esc(r.telecom)} · ${esc(r.model)}${planLine(r.plan)}</div>
-      ${r.body ? `<div class="lc-why">${esc(r.body)}</div>` : ""}`;
+      <div class="lc-tap">
+        <div class="lc-top"><span class="lc-name">${esc(r.customer) || "-"}</span>
+          <span class="lc-phone">${esc(r.phone)}</span>
+          <span class="lc-tag ${tagCls}">${tagTxt}</span>${hasBody ? `<span class="lc-caret">▾</span>` : ""}</div>
+        <div class="lc-meta">개통 ${esc(r.opendate)} · 만료 ${esc(r.expiry_date)} · 처리 ${esc(r.sent_at.replace("T", " ").slice(0, 16))}<br>
+          ${esc(r.agency)} · ${esc(r.telecom)} · ${esc(r.model)}${planLine(r.plan)}</div>
+      </div>
+      <div class="lc-why hidden"></div>`;
+    if (hasBody) {
+      const tap = el.querySelector(".lc-tap") as HTMLElement;
+      const box = el.querySelector(".lc-why") as HTMLElement;
+      const caret = el.querySelector(".lc-caret") as HTMLElement | null;
+      box.textContent = r.body ?? ""; // pre-wrap CSS가 줄바꿈을 보낸 원문 그대로 살린다
+      tap.onclick = () => {
+        const hidden = box.classList.toggle("hidden");
+        if (caret) caret.textContent = hidden ? "▾" : "▴";
+      };
+    }
     list.appendChild(el);
   }
 }
@@ -1084,19 +1099,36 @@ async function exportCsv(): Promise<void> {
 }
 async function exportBackup(): Promise<void> {
   const backup = buildBackup(CFG, await history.exportAll(), nowIso());
-  await shareText("약정만료 알리미 백업", JSON.stringify(backup));
+  const json = JSON.stringify(backup, null, 2);
+  const fname = `poncle-backup-${todayIsoLocal()}.json`;
+  try {
+    // 실제 .json 파일로 저장한 뒤 그 파일을 공유(→ 새 폰에서 '파일 가져오기'로 복원).
+    const { uri } = await Filesystem.writeFile({ path: fname, data: json, directory: Directory.Cache, encoding: Encoding.UTF8 });
+    await Share.share({ title: "약정만료 알리미 백업", url: uri, dialogTitle: "백업 파일 저장/공유" });
+  } catch {
+    // 웹 프리뷰/공유 대상 없음: 텍스트 공유(클립보드)로 대체.
+    await shareText("약정만료 알리미 백업", json);
+  }
   await history.setLastBackup(nowIso()); // 대시보드 백업 리마인더 기준
 }
-async function doRestore(): Promise<void> {
-  const text = $<HTMLTextAreaElement>("#restore-text").value.trim();
+/** Import a backup from a picked .json file (replaces paste-JSON restore). */
+async function restoreFromFile(input: HTMLInputElement): Promise<void> {
+  const file = input.files?.[0];
   const msg = $("#backup-msg");
-  const backup = parseBackup(text);
-  if (!backup) { msg.textContent = "백업 형식이 아닙니다"; return; }
-  await history.replaceAll(backup.history);
-  if (backup.config) CFG = await saveConfig(backup.config);
-  $<HTMLTextAreaElement>("#restore-text").value = "";
-  msg.textContent = `복원됨 (이력 ${backup.history.length}건)`;
-  toast("복원되었습니다");
+  if (!file) return;
+  try {
+    const backup = parseBackup(await file.text());
+    if (!backup) { msg.textContent = "백업 파일 형식이 아닙니다"; toast("백업 형식이 아닙니다", { err: true }); return; }
+    await history.replaceAll(backup.history);
+    if (backup.config) CFG = await saveConfig(backup.config);
+    msg.textContent = `복원됨 (이력 ${backup.history.length}건)`;
+    toast("복원되었습니다");
+  } catch {
+    msg.textContent = "파일을 읽지 못했습니다";
+    toast("파일을 읽지 못했습니다", { err: true });
+  } finally {
+    input.value = ""; // 같은 파일을 다시 고를 수 있도록 초기화
+  }
 }
 
 /* ---------- onboarding ---------- */
@@ -1312,7 +1344,8 @@ function bind(): void {
   // Backup / export
   $("#btn-export-csv").onclick = () => void exportCsv();
   $("#btn-export-backup").onclick = () => void exportBackup();
-  $("#btn-restore").onclick = () => void doRestore();
+  $("#btn-restore-file").onclick = () => $<HTMLInputElement>("#restore-file").click();
+  $<HTMLInputElement>("#restore-file").addEventListener("change", (e) => void restoreFromFile(e.target as HTMLInputElement));
 
   $("#btn-save").onclick = async () => {
     await saveSettingsNow();
