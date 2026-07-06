@@ -285,8 +285,9 @@ public class PonclePlugin extends Plugin {
                 restoreSessionCookieIfNeeded(baseUrl);
                 JSONObject data = getJson(baseUrl, path, referer, params);
                 if (data == null || !data.has("list")) {
-                    // getJson returns null only for the actual login page == session
-                    // expired (other non-data responses throw -> the catch below).
+                    // getJson returns null for ANY session-expiry response (login page,
+                    // non-200, or non-data JSON). A genuine transport error (no response)
+                    // throws instead -> the catch below flags netError for a retry.
                     ret.put("ok", false);
                     ret.put("netError", false);
                     ret.put("total", 0);
@@ -314,11 +315,13 @@ public class PonclePlugin extends Plugin {
     }
 
     // -- http ---------------------------------------------------------------
-    /** Authenticated GET of a Poncle list endpoint. Returns the parsed JSON when it
-     *  is data (a JSON object with a "list"); returns null ONLY when the response is
-     *  the login page (a real session expiry); THROWS for anything else (non-200,
-     *  or an ambiguous non-data 200) so the caller treats it as a retryable error
-     *  rather than a false logout. `path` e.g. "/open/listOpen"; `referer` e.g. "/open/mobile". */
+    /** Authenticated GET of a Poncle list endpoint. Returns the parsed JSON when the
+     *  response is real data (HTTP 200 + a JSON object with a "list"); returns null for
+     *  ANY other response the server actually returned (non-200, login/WAF HTML, JSON
+     *  without a "list") — that is a session expiry, which the caller turns into the
+     *  재로그인 banner. THROWS only when no response was received at all (connect/read
+     *  timeout, IO) — the one genuine, retryable network error. Mirrors the PC backend's
+     *  _looks_like_data (session.py). `path` e.g. "/open/listOpen"; `referer` e.g. "/open/mobile". */
     private JSONObject getJson(String baseUrl, String path, String referer, Map<String, String> params) throws Exception {
         StringBuilder qs = new StringBuilder();
         for (Map.Entry<String, String> e : params.entrySet()) {
@@ -341,39 +344,30 @@ public class PonclePlugin extends Plugin {
         if (cookie != null && !cookie.isEmpty()) {
             conn.setRequestProperty("Cookie", cookie);
         }
+        int code;
+        String body = "";
         try {
-            int code = conn.getResponseCode();
-            if (code != 200) throw new java.io.IOException("HTTP " + code); // transport error
-            String finalUrl = conn.getURL() != null ? conn.getURL().toString() : "";
-            String body = readBody(conn);
-            String trimmed = body.trim();
-            if (trimmed.startsWith("{")) {
-                JSONObject data = new JSONObject(trimmed);
-                if (data.has("list")) return data; // real data
-                // JSON without "list" is abnormal but NOT a clear logout -> retryable.
-                throw new java.io.IOException("unexpected JSON (no list)");
-            }
-            // Non-JSON: only a genuine login page means the session actually expired.
-            // Any OTHER html (rate-limit/WAF block, error, maintenance) must NOT be
-            // reported as a logout — doing so produced a false "세션 만료" while the
-            // WebView (same cookies) was still logged in. Treat it as retryable.
-            if (isLoginPage(finalUrl, trimmed)) return null; // -> session expired
-            throw new java.io.IOException("non-data response (not login page)");
+            code = conn.getResponseCode();          // no response at all (timeout/IO/DNS) throws -> network error
+            if (code == 200) body = readBody(conn); // only a 200 can carry data; skip error-page bodies
         } finally {
             conn.disconnect();
         }
-    }
-
-    /** Heuristic: is this response Poncle's login page (i.e. a real session expiry)?
-     *  Checks the post-redirect final URL and the login form's field names (the same
-     *  markers the WebView autofill keys on). Robust to both the 302-to-login and the
-     *  inline-login-html expiry behaviours. */
-    private static boolean isLoginPage(String finalUrl, String body) {
-        String u = finalUrl == null ? "" : finalUrl.toLowerCase();
-        if (u.contains("/member/login") || u.contains("/login")) return true;
-        if (body == null) return false;
-        return body.contains("name=\"userpw\"") || body.contains("name='userpw'")
-            || body.contains("name=\"userid\"") || body.contains("name='userid'");
+        // A response WAS received. Mirror the PC backend (session.py _looks_like_data):
+        // real data == HTTP 200 + a JSON object carrying a "list". ANYTHING else the
+        // server returned — a non-200, a login/WAF/maintenance HTML page, or JSON without
+        // a "list" — is a session expiry, NOT a transport error, so return null and let
+        // the caller show the 재로그인 banner. The earlier port threw here, which made an
+        // expired login surface as a misleading 네트워크 오류 the user could only retry.
+        if (code != 200) return null;
+        String trimmed = body.trim();
+        if (!trimmed.startsWith("{")) return null;  // login page / WAF HTML == expired
+        JSONObject data;
+        try {
+            data = new JSONObject(trimmed);
+        } catch (org.json.JSONException e) {
+            return null;                            // malformed JSON == not data == expired
+        }
+        return data.has("list") ? data : null;      // JSON without "list" == expired
     }
 
     private String readBody(HttpURLConnection conn) throws Exception {
