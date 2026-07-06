@@ -8,7 +8,7 @@ import { COHORT_WINDOW_DAYS, updateCohort } from "./cohort";
 import { entryFromRow, field } from "./due-item";
 import { contractTermMonths, keepdateDefaultMonths, milestoneDue, scanOpenDateBounds } from "./expiry";
 import type { History } from "./history";
-import { keepDueItem, keepDueRows, keepPhoneSet } from "./keepdate";
+import { dueKey, keepDueItem, keepDueRows, keepPhoneSet } from "./keepdate";
 import { NetworkError, PoncleClient, PoncleGateway, SessionExpired } from "./poncle-client";
 import { PlainDate, today } from "./plaindate";
 import { isContractType } from "./template-match";
@@ -38,7 +38,10 @@ export interface ScanResult {
 function errorResult(e: unknown, empty: { results: DueItem[]; unvisited: DueItem[]; pendingDegraded: boolean; targets: number; sent: number; pending: number }): ScanResult | null {
   if (e instanceof SessionExpired) return { status: "session_expired", state: "session_expired", ...empty };
   if (e instanceof NetworkError) return { status: "error", state: "error", error: "네트워크 오류로 스캔에 실패했습니다. 잠시 후 다시 시도하세요.", ...empty };
-  return { status: "error", state: "error", error: String(e), ...empty };
+  // Never surface a raw exception string (e.g. "TypeError: ...") to a non-technical
+  // 점주 — log the detail for debugging, show a plain Korean message.
+  console.error("scan failed:", e);
+  return { status: "error", state: "error", error: "스캔 중 오류가 발생했습니다. 다시 시도해 주세요.", ...empty };
 }
 
 /**
@@ -136,15 +139,15 @@ export async function runScan(
   // 사라져 계약 만료 안내를 놓친다.
   const byKey = new Map<string, DueItem>();
   for (const it of [...termItems, ...keepItems, ...stage1Default]) {
-    const key = `${it.phone}|${it.expiry_date}`;
+    const key = dueKey(it.phone, it.expiry_date);
     if (!byKey.has(key)) byKey.set(key, it);
   }
   const results = Array.from(byKey.values());
 
-  // already_sent + id (dedup on phone|expiry), loaded once.
+  // already_sent + id (dedup on normalized phone|expiry), loaded once.
   const sentKeys = await history.dedupKeySet();
   for (const item of results) {
-    item.id = `${item.phone}|${item.expiry_date}`;
+    item.id = dueKey(item.phone, item.expiry_date);
     item.already_sent = sentKeys.has(item.id);
   }
 

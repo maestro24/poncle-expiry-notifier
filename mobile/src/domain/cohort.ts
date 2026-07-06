@@ -9,7 +9,7 @@
  * elsewhere. Bounded to a rolling window so the store can't grow forever.
  */
 import { parseOpendate } from "./expiry";
-import { normalizePhone } from "./keepdate";
+import { dueKey, normalizePhone } from "./keepdate";
 import { PlainDate, addDays, toIso } from "./plaindate";
 import type { DueItem, PoncleRow } from "./types";
 import { latestOpenByPhone } from "./unvisited";
@@ -37,7 +37,7 @@ export interface CohortStats {
 /** Rolling window (days) over which 재방문 전환율 is measured. */
 export const COHORT_WINDOW_DAYS = 90;
 
-const keyOf = (phone: string, expiry: string): string => `${phone}|${expiry}`;
+const keyOf = (phone: string, expiry: string): string => dueKey(phone, expiry);
 const pct = (a: number, b: number): number => (b > 0 ? Math.round((a / b) * 100) : 0);
 
 /**

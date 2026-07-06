@@ -8,7 +8,7 @@
  */
 import { field } from "./due-item";
 import { computeExpiry } from "./expiry";
-import { normalizePhone } from "./keepdate";
+import { dueKey, normalizePhone } from "./keepdate";
 import { PlainDate, daysBetween, toIso } from "./plaindate";
 import { isContractType } from "./template-match";
 import type { AppConfig, DueItem, PoncleRow } from "./types";
@@ -83,7 +83,7 @@ export function buildLookupResults(
     const hasPrior = (countByPhone.get(phoneDigits) ?? 1) > 1;
     const phone = field(row, "openphone");
     const expiryIso = expiry ? toIso(expiry) : "";
-    const id = `${phone}|${expiryIso}`;
+    const id = dueKey(phone, expiryIso);
     // days until expiry (clamped >=0), so an alert's {when} reads "D-N" not "오늘".
     const offsetDays = expiry ? Math.max(0, daysBetween(expiry, todayD)) : 0;
     out.push({

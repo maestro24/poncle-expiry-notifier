@@ -7,9 +7,11 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 import android.telephony.SmsManager;
 
 import androidx.core.content.ContextCompat;
@@ -93,6 +95,19 @@ public class SmsPlugin extends Plugin {
             doSend(call, call.getString("phone"), call.getString("text"));
         } else {
             call.reject("SMS 권한이 거부되었습니다");
+        }
+    }
+
+    @PluginMethod
+    public void openAppSettings(PluginCall call) {
+        try {
+            Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+            intent.setData(Uri.fromParts("package", getContext().getPackageName(), null));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("앱 설정 화면을 열 수 없습니다: " + e.getMessage());
         }
     }
 

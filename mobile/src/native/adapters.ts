@@ -33,6 +33,11 @@ export async function requestSmsPermission(): Promise<boolean> {
   return (await Sms.requestPermission()).granted;
 }
 
+/** Open this app's system settings (to re-enable a permanently-denied SMS permission). */
+export async function openAppSettings(): Promise<void> {
+  await Sms.openAppSettings();
+}
+
 /** Installed app versionName (e.g. "1.0.0"). */
 export async function getAppVersion(): Promise<string> {
   return (await AppUpdate.getVersion()).version;

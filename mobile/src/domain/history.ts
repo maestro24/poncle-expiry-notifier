@@ -10,6 +10,7 @@
  */
 import { Preferences } from "@capacitor/preferences";
 import type { CohortEntry } from "./cohort";
+import { dueKey } from "./keepdate";
 import type { DueItem } from "./types";
 
 export interface SentRecord {
@@ -66,9 +67,10 @@ function parseJsonArray<T>(raw: string | null): T[] {
 // Dedup identifies a customer's contract by phone + expiry date. Offset (days
 // until expiry) is deliberately NOT part of the key: in the range scan model it
 // changes daily, and a customer should be contacted once per contract, not once
-// per day-until-expiry.
+// per day-until-expiry. Phone is normalized (dueKey) so hyphenated vs bare formats
+// from different Poncle endpoints collapse to one key.
 function dedupKey(phone: string, expiry: string): string {
-  return `${phone}|${expiry}`;
+  return dueKey(phone, expiry);
 }
 
 export class History {

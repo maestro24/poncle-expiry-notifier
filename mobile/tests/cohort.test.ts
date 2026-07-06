@@ -15,7 +15,8 @@ const openRow = (phone: string, opendate: string): PoncleRow => ({ openphone: ph
 
 describe("updateCohort", () => {
   it("adds newly-expired customers with the informed flag from sentKeys", () => {
-    const out = updateCohort([], [expired("010-1", "2026-06-01")], [], new Set(["010-1|2026-06-01"]), TODAY, WINDOW);
+    // sentKeys use the dueKey format (digits-only phone): "010-1" -> "0101"
+    const out = updateCohort([], [expired("010-1", "2026-06-01")], [], new Set(["0101|2026-06-01"]), TODAY, WINDOW);
     expect(out.length).toBe(1);
     expect(out[0]).toMatchObject({ phone: "010-1", expiry: "2026-06-01", informed: true, revisited: false });
   });

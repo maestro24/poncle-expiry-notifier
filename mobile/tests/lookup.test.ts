@@ -46,7 +46,8 @@ describe("buildLookupResults", () => {
       row("010-5555-6666", "26-06-01"), // ...re-signed -> latest opendate -> newest
       row("010-7777-8888", "", { openhowx: "번호이동" }), // empty opendate -> 무약정 (no computable 만료)
     ];
-    const sent = new Map([["010-3333-4444|2026-05-01", "2026-04-20T09:00:00"]]);
+    // informed-join keyed by dueKey (digits-only phone)
+    const sent = new Map([["01033334444|2026-05-01", "2026-04-20T09:00:00"]]);
     const out = buildLookupResults(rows, cfg(), TODAY, WINDOW, sent);
 
     // Sorted by opendate descending (most recent contract on top); empty opendate last.
@@ -72,7 +73,7 @@ describe("buildLookupResults", () => {
 
   it("lookupToDueItem carries the real D-day offset so {when} renders D-N, not 오늘", () => {
     const rows = [row("010-1111-2222", "24-07-20")];
-    const [r] = buildLookupResults(rows, cfg(), TODAY, WINDOW, new Map([["010-1111-2222|2026-07-20", "x"]]));
+    const [r] = buildLookupResults(rows, cfg(), TODAY, WINDOW, new Map([["01011112222|2026-07-20", "x"]]));
     const item = lookupToDueItem(r);
     expect(item.phone).toBe("010-1111-2222");
     expect(item.expiry_date).toBe("2026-07-20");

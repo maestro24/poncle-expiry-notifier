@@ -4,6 +4,7 @@ import {
   historyToCsv,
   isAllowedPoncleBaseUrl,
   parseBackup,
+  restoreLosesHistory,
   sanitizeRecord,
 } from "../src/domain/export";
 import type { SentRecord } from "../src/domain/history";
@@ -115,6 +116,30 @@ describe("sanitizeRecord", () => {
     const r = sanitizeRecord({ phone: "010", expiry_date: "2026-01-05" });
     expect(r!.channel).toBe("sms");
     expect(r!.milestone_offset).toBe(0);
+  });
+  it("coerces an unknown/hostile channel to a safe known value (no stored XSS)", () => {
+    // The 이력 list renders the channel tag; an unknown value used to fall through
+    // to innerHTML unescaped. A restored/hostile backup carrying HTML in `channel`
+    // must be neutralized to a known value that maps to a fixed label.
+    const evil = sanitizeRecord({
+      phone: "010", expiry_date: "2026-01-05",
+      channel: "<img src=x onerror=alert(1)>",
+    });
+    expect(evil!.channel).toBe("record-only");
+    expect(sanitizeRecord({ phone: "010", expiry_date: "2026-01-05", channel: "skipped" })!.channel).toBe("skipped");
+    expect(sanitizeRecord({ phone: "010", expiry_date: "2026-01-05", channel: "record-only" })!.channel).toBe("record-only");
+  });
+});
+
+describe("restoreLosesHistory (guard a full-replace restore)", () => {
+  it("flags a restore that shrinks or wipes a non-empty history", () => {
+    expect(restoreLosesHistory(10, 0)).toBe(true); // empty/wrong file over real data
+    expect(restoreLosesHistory(10, 3)).toBe(true); // fewer records
+  });
+  it("allows a growing/equal restore and any restore over an empty store", () => {
+    expect(restoreLosesHistory(10, 10)).toBe(false);
+    expect(restoreLosesHistory(10, 25)).toBe(false);
+    expect(restoreLosesHistory(0, 0)).toBe(false); // nothing to lose
   });
 });
 

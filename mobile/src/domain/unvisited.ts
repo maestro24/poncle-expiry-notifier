@@ -14,7 +14,7 @@
  */
 import { entryFromRow, field } from "./due-item";
 import { computeExpiry, unvisitedFloor } from "./expiry";
-import { normalizePhone } from "./keepdate";
+import { dueKey, normalizePhone } from "./keepdate";
 import { PlainDate, daysBetween } from "./plaindate";
 import { isContractType } from "./template-match";
 import type { AppConfig, DueItem, PoncleRow } from "./types";
@@ -62,7 +62,7 @@ export function computeUnvisited(
     if (!expiredWithinLookback(expiry, todayD, floor)) continue;
     const item = entryFromRow(row, daysBetween(todayD, expiry), expiry); // offset = D+
     item.source = isContractType(field(row, "openhowx")) ? "term" : "keepdate";
-    item.id = `${item.phone}|${item.expiry_date}`;
+    item.id = dueKey(item.phone, item.expiry_date);
     item.already_sent = sentKeys.has(item.id);
     out.push(item);
   }

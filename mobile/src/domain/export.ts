@@ -13,6 +13,18 @@ const CHANNEL_LABEL: Record<string, string> = {
   skipped: "제외",
 };
 
+/** The only channel values the app produces. A restored/hostile backup carrying
+ *  anything else (e.g. an HTML payload aimed at the 이력 list's innerHTML) is
+ *  coerced to "record-only" so it can never reach a render path unescaped. */
+const CHANNELS = new Set(["sms", "record-only", "skipped"]);
+function normalizeChannel(v: unknown): string {
+  const s = str(v);
+  if (s === "") return "sms"; // preserve the prior default for a blank/missing field
+  // Any non-empty value that isn't a known channel (e.g. an HTML payload aimed at the
+  // 이력 list's innerHTML) is coerced to a safe known value so it never renders.
+  return CHANNELS.has(s) ? s : "record-only";
+}
+
 function csvCell(v: unknown): string {
   const s = String(v ?? "");
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -54,6 +66,15 @@ export interface Backup {
 /** Build a JSON backup of settings + send history. */
 export function buildBackup(config: AppConfig | null, history: SentRecord[], nowIso: string): Backup {
   return { app: "poncle-expiry", version: 1, exported_at: nowIso, config, history };
+}
+
+/** Whether restoring `incoming` records over `existing` ones would DESTROY history —
+ *  i.e. the restore shrinks the log (fewer records, or wipes a non-empty log). A
+ *  restore is a full replaceAll, so a wrong/old/empty file silently drops the very
+ *  dedup history that stops the whole customer book being re-messaged. The caller
+ *  must confirm before replacing when this is true. Growing/equal restores are safe. */
+export function restoreLosesHistory(existing: number, incoming: number): boolean {
+  return existing > 0 && incoming < existing;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -100,7 +121,7 @@ export function sanitizeRecord(raw: unknown): SentRecord | null {
     model: str(raw.model),
     openhow: str(raw.openhow),
     staff: str(raw.staff),
-    channel: str(raw.channel) || "sms",
+    channel: normalizeChannel(raw.channel),
     sent_at: str(raw.sent_at),
   };
   if (raw.body != null) rec.body = str(raw.body);

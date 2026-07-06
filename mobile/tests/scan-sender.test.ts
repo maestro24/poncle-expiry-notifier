@@ -74,6 +74,23 @@ describe("History", () => {
     expect(await h.alreadySent("010", "2026-01-01")).toBe(true);
     expect(await h.alreadySent("010", "2026-02-01")).toBe(false); // different expiry
   });
+  it("dedup is phone-FORMAT-insensitive: hyphenated vs bare are the same customer", async () => {
+    // The 미결 endpoint may return "010-1111-2222" while 개통 returns "01011112222"
+    // for the SAME customer. The dedup key normalizes the phone so a send recorded
+    // in one format is still recognized as already-sent when the other format shows up
+    // (no silent double-send, no phantom miss).
+    const h = new History(memKV());
+    const e = { phone: "010-1111-2222", customer: "김", opendate: "24-01-01", expiry_date: "2026-01-01",
+      milestone_offset: 25, telecom: "", agency: "", plan: "", model: "", openhow: "", staff: "" };
+    expect(await h.recordSent(e, "sms", "2026-07-03T09:00:00")).toBe(true);
+    // bare digits (other endpoint's format) -> recognized as already sent
+    expect(await h.alreadySent("01011112222", "2026-01-01")).toBe(true);
+    expect(await h.recordSent({ ...e, phone: "01011112222" }, "sms", "2026-07-03T09:01:00")).toBe(false);
+    expect(await h.getRecord("010 1111 2222", "2026-01-01")).not.toBeNull(); // spaces too
+    expect((await h.exportAll()).length).toBe(1); // one row, not two
+    // dedupKeySet exposes the normalized key
+    expect((await h.dedupKeySet()).has("01011112222|2026-01-01")).toBe(true);
+  });
   it("search filters by query and date", async () => {
     const h = new History(memKV());
     await h.recordSent({ phone: "010-1", customer: "김수현", opendate: "", expiry_date: "2026-01-01",
@@ -120,29 +137,31 @@ describe("History", () => {
   it("setHandled toggles the manual 방문완료 key set (works without a sent record)", async () => {
     const h = new History(memKV());
     expect((await h.handledKeys()).size).toBe(0);
-    await h.setHandled("010-x", "2026-06-01", true);
-    expect((await h.handledKeys()).has("010-x|2026-06-01")).toBe(true);
-    await h.setHandled("010-x", "2026-06-01", false);
-    expect((await h.handledKeys()).has("010-x|2026-06-01")).toBe(false);
+    // handled keys use dueKey (digits-only phone): "010-1111-2222" -> "01011112222"
+    await h.setHandled("010-1111-2222", "2026-06-01", true);
+    expect((await h.handledKeys()).has("01011112222|2026-06-01")).toBe(true);
+    await h.setHandled("010-1111-2222", "2026-06-01", false);
+    expect((await h.handledKeys()).has("01011112222|2026-06-01")).toBe(false);
   });
 
   it("migrateRecontacted folds legacy 연락완료 flags into the handled set, once", async () => {
     const kv = memKV();
     await kv.set("sent_log", JSON.stringify([
-      { ...base, phone: "010-z", expiry_date: "2026-06-01", channel: "sms",
+      { ...base, phone: "010-1111-1111", expiry_date: "2026-06-01", channel: "sms",
         sent_at: "2026-05-25T09:00:00", recontacted: true },
-      { ...base, phone: "010-y", expiry_date: "2026-06-05", channel: "sms",
+      { ...base, phone: "010-2222-2222", expiry_date: "2026-06-05", channel: "sms",
         sent_at: "2026-05-25T09:00:00" }, // never marked
     ]));
     const h = new History(kv);
     await h.migrateRecontacted();
     const keys = await h.handledKeys();
-    expect(keys.has("010-z|2026-06-01")).toBe(true);
-    expect(keys.has("010-y|2026-06-05")).toBe(false);
+    // handled keys use dueKey (digits-only phone)
+    expect(keys.has("01011111111|2026-06-01")).toBe(true);
+    expect(keys.has("01022222222|2026-06-05")).toBe(false);
     // idempotent: after an unset, re-running migration must NOT re-add the key
-    await h.setHandled("010-z", "2026-06-01", false);
+    await h.setHandled("010-1111-1111", "2026-06-01", false);
     await h.migrateRecontacted();
-    expect((await h.handledKeys()).has("010-z|2026-06-01")).toBe(false);
+    expect((await h.handledKeys()).has("01011111111|2026-06-01")).toBe(false);
   });
 });
 
@@ -165,6 +184,20 @@ describe("runScan", () => {
     };
     const res = await runScan(gw, cfg(), new History(memKV()), TODAY);
     expect(res.status).toBe("error");
+  });
+
+  it("hides a raw exception string behind a generic Korean message", async () => {
+    // A non-network/session error (e.g. a TypeError) must NOT surface its raw text
+    // to a non-technical 점주 — they should see a plain retry message.
+    const gw = {
+      check: async () => true,
+      listPending: async () => ({ ok: true, total: 0, list: [] as PoncleRow[] }),
+      listOpen: async () => { throw new TypeError("Cannot read properties of undefined (reading 'x')"); },
+    };
+    const res = await runScan(gw, cfg(), new History(memKV()), TODAY);
+    expect(res.status).toBe("error");
+    expect(res.error).toBe("스캔 중 오류가 발생했습니다. 다시 시도해 주세요.");
+    expect(res.error).not.toContain("TypeError");
   });
 
   it("builds the due list, ignores not-due rows, marks already_sent, sorts unsent first", async () => {

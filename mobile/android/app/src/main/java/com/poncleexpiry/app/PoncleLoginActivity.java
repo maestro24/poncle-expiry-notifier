@@ -40,6 +40,22 @@ public class PoncleLoginActivity extends Activity {
     private String pendingId;
     private String pendingPw;
 
+    // --- Stale-autofill-password guard (session-scoped; not persisted) ---
+    // The password value we last autofilled from CredStore (null once the user
+    // edits the field or autofill is disabled). Used to tell "submitted the
+    // autofilled password unchanged" apart from "user typed their own password".
+    private String autofillPw;
+    // True once we've reached the login page while an autofilled password was
+    // submitted on the previous load without succeeding (i.e. still on /member/login).
+    private boolean awaitingAutofillResult = false;
+    // Count of submits of the (unchanged) autofilled password that did not lead
+    // away from the login page.
+    private int autofillFailCount = 0;
+    // Once true, tryAutofill stops filling the password field (id is still fine).
+    private boolean autofillPwDisabled = false;
+    // Ensures the "stored password may be wrong" notice is shown only once.
+    private boolean warnedStalePw = false;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -96,6 +112,7 @@ public class PoncleLoginActivity extends Activity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 CookieManager.getInstance().flush();
+                checkAutofillSubmitResult(url);
                 tryAutofill(url);
                 injectCaptureHook(url);
                 maybeAutoComplete(url);
@@ -148,6 +165,32 @@ public class PoncleLoginActivity extends Activity {
         }
     }
 
+    /**
+     * Called on every page load, BEFORE tryAutofill/maybeAutoComplete run for
+     * this load. If the previous load had submitted the autofilled password
+     * unchanged (see CredBridge.capture) and we're back on the login page
+     * (i.e. login did not succeed), count it as a failed autofill attempt. On
+     * the first such failure, stop auto-filling the password from now on and
+     * show a one-time Korean notice. This never fires for credentials the user
+     * typed themselves, and never touches maybeAutoComplete/cookie logic.
+     */
+    private void checkAutofillSubmitResult(String url) {
+        if (!awaitingAutofillResult) return;
+        awaitingAutofillResult = false;
+        if (!isLoginUrl(url)) return; // navigated away -> login likely succeeded
+        autofillFailCount++;
+        if (autofillFailCount >= 1 && !autofillPwDisabled) {
+            autofillPwDisabled = true;
+            autofillPw = null;
+            if (!warnedStalePw) {
+                warnedStalePw = true;
+                runOnUiThread(() -> Toast.makeText(this,
+                    "저장된 비밀번호가 맞지 않을 수 있습니다. 직접 입력하거나 설정에서 자격증명을 갱신하세요.",
+                    Toast.LENGTH_LONG).show());
+            }
+        }
+    }
+
     /** Save the id/password typed during THIS (successful) login so it can be
      *  auto-filled next time. No-op if nothing was captured (e.g. autofill only). */
     private void commitPendingCreds() {
@@ -191,6 +234,11 @@ public class PoncleLoginActivity extends Activity {
             if (pw != null && !pw.isEmpty()) {
                 pendingId = id == null ? "" : id;
                 pendingPw = pw;
+                // If the submitted password is exactly what we autofilled (user
+                // didn't retype anything), arm the failure check for the next
+                // page load. If the user changed it, this is a fresh manual
+                // attempt and must not count against the autofill guard.
+                awaitingAutofillResult = autofillPw != null && autofillPw.equals(pw);
             }
         }
     }
@@ -205,7 +253,10 @@ public class PoncleLoginActivity extends Activity {
         if (!isLoginUrl(url)) return;
         try {
             String id = CredStore.getId(this);
-            String pw = CredStore.getPw(this);
+            // Once a stored password has been observed to fail once, stop
+            // auto-filling it (the id is still harmless to fill) so we don't
+            // keep re-submitting a stale password and risk an account lock.
+            String pw = autofillPwDisabled ? null : CredStore.getPw(this);
             if ((id == null || id.isEmpty()) && (pw == null || pw.isEmpty())) return;
             String js =
                 "(function(){"
@@ -213,9 +264,15 @@ public class PoncleLoginActivity extends Activity {
                 + "var p=document.querySelector('input[name=\"userpw\"]');"
                 + "if(u){u.value=" + JSONObject.quote(id == null ? "" : id)
                 + ";u.dispatchEvent(new Event('input',{bubbles:true}));}"
-                + "if(p){p.value=" + JSONObject.quote(pw == null ? "" : pw)
-                + ";p.dispatchEvent(new Event('input',{bubbles:true}));}"
+                + (pw != null
+                    ? "if(p){p.value=" + JSONObject.quote(pw)
+                        + ";p.dispatchEvent(new Event('input',{bubbles:true}));}"
+                    : "")
                 + "})();";
+            // Track what we (may have) filled into the password field so the
+            // capture bridge can tell "submitted our autofill unchanged" apart
+            // from "user typed their own password".
+            autofillPw = pw != null && !pw.isEmpty() ? pw : null;
             if (webView != null) webView.evaluateJavascript(js, null);
         } catch (Exception e) {
             // autofill is best-effort; ignore failures

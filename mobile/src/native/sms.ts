@@ -13,6 +13,9 @@ export interface SmsPlugin {
   checkPermission(): Promise<{ granted: boolean }>;
   /** Prompt for SEND_SMS (no-op if already granted). Returns the new state. */
   requestPermission(): Promise<{ granted: boolean }>;
+  /** Open this app's system settings page so the user can flip a permanently-denied
+   *  SEND_SMS permission back on (the request dialog no longer appears once denied). */
+  openAppSettings(): Promise<void>;
 }
 
 export const Sms = registerPlugin<SmsPlugin>("Sms", {
@@ -23,5 +26,6 @@ export const Sms = registerPlugin<SmsPlugin>("Sms", {
     },
     checkPermission: async () => ({ granted: false }),
     requestPermission: async () => ({ granted: false }),
+    openAppSettings: async () => {},
   }),
 });

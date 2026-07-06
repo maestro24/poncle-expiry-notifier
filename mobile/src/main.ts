@@ -6,8 +6,9 @@ import { Preferences } from "@capacitor/preferences";
 import { Share } from "@capacitor/share";
 import { Directory, Encoding, Filesystem } from "@capacitor/filesystem";
 import { DEFAULTS, loadConfig, saveConfig, seedDefaultTemplates } from "./domain/config";
-import { buildBackup, historyToCsv, parseBackup } from "./domain/export";
+import { buildBackup, historyToCsv, parseBackup, restoreLosesHistory } from "./domain/export";
 import { History, preferencesKV, type SentRecord } from "./domain/history";
+import { dueKey } from "./domain/keepdate";
 import { cohortStats, COHORT_WINDOW_DAYS } from "./domain/cohort";
 import { carrierBreakdown, sentTrend } from "./domain/dashboard";
 import { buildLookupResults, lookupToDueItem, type LookupResult } from "./domain/lookup";
@@ -24,6 +25,7 @@ import {
   getAppVersion,
   getPoncleCredentialsMeta,
   nativePoncleGateway,
+  openAppSettings,
   openExternalUrl,
   poncleHasSession,
   poncleLogin,
@@ -263,13 +265,6 @@ function onSend(item: DueItem, _btn: HTMLButtonElement): void {
   openConfirm(item); // 확인 모달에서 템플릿 선택/편집 후 발송
 }
 
-/** Refresh whatever list is on screen after a send / restore (home / 이력 / 조회). */
-function refreshAfterSend(): void {
-  if (CURRENT === "history") void loadHistory();
-  else if (CURRENT === "lookup") void refreshLookupInformed();
-  else renderDueList();
-}
-
 /** Open the phone dialer for this customer's number (ACTION_VIEW tel:). */
 async function onCall(item: DueItem): Promise<void> {
   const digits = String(item.phone || "").replace(/[^0-9+]/g, "");
@@ -293,7 +288,7 @@ const sendingKeys = new Set<string>();
  *  send (keyed off the log, not a possibly-stale captured object). */
 async function reconcileSentFlags(): Promise<void> {
   const sent = await history.dedupKeySet();
-  for (const r of RESULTS) r.already_sent = sent.has(`${r.phone}|${r.expiry_date}`);
+  for (const r of RESULTS) r.already_sent = sent.has(dueKey(r.phone, r.expiry_date));
 }
 
 /** Fill the confirm body from a template id, or leave it as-is (직접 입력). */
@@ -377,48 +372,62 @@ async function doConfirmSend(): Promise<void> {
     return;
   }
 
-  // Deliver ON — 낙관적: 기록/업데이트 + 홈 처리 즉시, 전송은 백그라운드.
-  // 발송이 실제로 시작되기 전(기록/캐시 저장 단계)에 실패하면 in-flight 가드를 반드시
-  // 풀어 준다 — 안 그러면 그 고객이 세션 내내 "이미 처리 중"으로 막힌다.
+  // Deliver ON — send FIRST, record ONLY after the carrier confirms. Recording
+  // before the send (the old optimistic path) meant a mid-send app kill could leave
+  // a "발송됨" record for a message that never went out — the customer would then be
+  // silently dropped from every future scan (already_sent) and never re-alerted.
+  // Send-then-record can only ever fail the other way (sent but not recorded), which
+  // is visible (a possible duplicate next scan) rather than a silent 영구 miss.
+  toast("문자 보내는 중…");
+  try {
+    await sendSms(item.phone, text);
+  } catch (e) {
+    sendingKeys.delete(key);
+    const msg = e instanceof Error ? e.message : "발송 실패";
+    toast(`${item.customer || item.phone} 발송 실패 — ${msg}`, { err: true });
+    void maybeOfferSmsSettings(msg); // 권한 거부면 설정 열기 안내
+    return; // 고객은 홈에 미발송으로 그대로 남는다
+  }
   try {
     await history.putRecord(rec); // 신규면 insert, 재발송이면 update
     markHandled(item);
     await history.cacheDueList(RESULTS);
-  } catch (e) {
+  } catch {
+    // 문자는 나갔지만 이력 저장 실패 — 다음 스캔에서 중복 발송될 수 있으니 알린다.
+    toast("문자는 보냈지만 이력 저장에 실패했습니다 — 다음 스캔에서 중복 발송에 주의하세요", { err: true });
+  } finally {
     sendingKeys.delete(key);
-    toast(e instanceof Error ? e.message : "저장 실패 — 다시 시도하세요", { err: true });
-    return;
   }
   toast(prev ? "다시 보냈습니다 (안내 이력 업데이트)" : "문자를 보냈습니다");
-  void sendSms(item.phone, text).then(
-    () => sendingKeys.delete(key),
-    async () => {
-      // 전송 실패: 재발송이면 직전 이력을 되살려 '발송됨' 유지, 신규 발송이면 기록을
-      // 지워 고객을 홈에 미발송으로 복귀. 항상 로그 기준으로 목록/캐시를 재계산.
-      sendingKeys.delete(key);
-      if (prev) await history.putRecord(prev);
-      else await history.remove(item.phone, item.expiry_date);
-      await reconcileSentFlags();
-      await history.cacheDueList(RESULTS);
-      refreshAfterSend();
-      toast(
-        prev
-          ? `${item.customer || item.phone} 재발송 실패 — 기존 이력 유지`
-          : `${item.customer || item.phone} 발송 실패 — 홈으로 되돌렸습니다`,
-        { err: true },
-      );
-    },
-  );
+}
+
+/** When a send/permission failure was a permission denial, offer to jump to the app
+ *  settings so the user can re-enable a permanently-denied SEND_SMS (the OS stops
+ *  showing the request dialog once "다시 묻지 않음"). No-op for other failures. */
+async function maybeOfferSmsSettings(reason: string): Promise<void> {
+  if (!/권한/.test(reason)) return;
+  const go = window.confirm("문자 발송 권한이 꺼져 있습니다.\n설정 화면에서 SMS 권한을 켜시겠어요?");
+  if (!go) return;
+  try {
+    await openAppSettings();
+  } catch {
+    toast("설정 화면을 열 수 없습니다", { err: true });
+  }
 }
 
 /* ---------- scan ---------- */
 async function doScan(): Promise<void> {
+  // Re-entry guard across ALL entry points (홈 #btn-scan, 대시보드 #dash-scan,
+  // 배너 #btn-retry). Each button only disables itself, so without this a scan
+  // started from one screen could run in parallel with another and let two scans
+  // race their RESULTS/cache writes (last-writer-wins, unpredictable final state).
+  if (SCANNING) return;
+  SCANNING = true; // a scan owns the session/error banner until it finishes
   renderState("scanning");
   const btn = $<HTMLButtonElement>("#btn-scan");
   btn.disabled = true;
   const prev = btn.textContent;
   btn.textContent = "스캔 중…";
-  SCANNING = true; // a scan owns the session/error banner until it finishes
   try {
     const res = await runScan(nativePoncleGateway(CFG), CFG, history);
     LAST_SCAN = nowShort();
@@ -512,7 +521,7 @@ async function renderSentHistory(): Promise<void> {
   for (const r of rows) {
     const el = document.createElement("div");
     el.className = "listcard";
-    const [tagCls, tagTxt] = tag[r.channel] ?? ["tag-rec", r.channel];
+    const [tagCls, tagTxt] = tag[r.channel] ?? ["tag-rec", esc(r.channel)];
     const hasBody = !!r.body;
     // 카드 헤더/메타는 lc-tap 안에 두고 탭하면 아래로 보낸 문자 원문이 펼쳐진다(다시 탭하면 접힘).
     el.innerHTML = `
@@ -767,7 +776,7 @@ async function lookupSentIndex(): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   for (const r of await history.exportAll()) {
     if (r.channel === "skipped") continue;
-    const key = `${r.phone}|${r.expiry_date}`;
+    const key = dueKey(r.phone, r.expiry_date);
     const prev = map.get(key);
     if (!prev || r.sent_at > prev) map.set(key, r.sent_at);
   }
@@ -1129,6 +1138,17 @@ async function restoreFromFile(input: HTMLInputElement): Promise<void> {
   try {
     const backup = parseBackup(await file.text());
     if (!backup) { msg.textContent = "백업 파일 형식이 아닙니다"; toast("백업 형식이 아닙니다", { err: true }); return; }
+    // Restore is a FULL replace. If the picked file has fewer records than what's
+    // stored (wrong/old/empty file), replacing silently wipes the send history that
+    // stops the whole customer book being re-messaged — confirm before destroying it.
+    const existing = (await history.exportAll()).length;
+    if (restoreLosesHistory(existing, backup.history.length)) {
+      const ok = window.confirm(
+        `현재 발송 이력 ${existing}건이 백업의 ${backup.history.length}건으로 덮어써집니다.\n` +
+        `이력이 줄어듭니다 — 잘못된 파일일 수 있습니다. 계속할까요?`,
+      );
+      if (!ok) { msg.textContent = "복원을 취소했습니다"; toast("복원 취소됨"); return; }
+    }
     await history.replaceAll(backup.history);
     if (backup.config) CFG = await saveConfig(backup.config);
     msg.textContent = `복원됨 (이력 ${backup.history.length}건)`;
@@ -1297,7 +1317,12 @@ function bind(): void {
     const nowOn = !el.classList.contains("on");
     el.classList.toggle("on", nowOn);
     await saveSettingsNow();
-    if (nowOn) await requestSmsPermission();
+    if (nowOn) {
+      const granted = await requestSmsPermission();
+      // Permanently denied ("다시 묻지 않음"): the request dialog no longer appears,
+      // so guide the user to settings instead of leaving 발송 quietly broken.
+      if (!granted) await maybeOfferSmsSettings("SMS 권한");
+    }
   };
   // Auto-save any settings field on change (blur), so 저장 is optional.
   $("#view-settings").addEventListener("change", (e) => {

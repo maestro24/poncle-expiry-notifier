@@ -41,7 +41,8 @@ describe("computeUnvisited", () => {
     expect(out.length).toBe(1);
     expect(out[0].expiry_date).toBe("2026-06-01");
     expect(out[0].source).toBe("term");
-    expect(out[0].id).toBe("010-1111-2222|2026-06-01");
+    expect(out[0].id).toBe("01011112222|2026-06-01"); // key uses normalized (digits) phone
+
     expect(out[0].milestone_offset).toBe(32); // D+32
     expect(out[0].already_sent).toBe(false);
   });
@@ -69,9 +70,9 @@ describe("computeUnvisited", () => {
     expect(computeUnvisited(rows, cfg(), TODAY, NONE)).toEqual([]);
   });
 
-  it("tags already_sent from the sent key set", () => {
+  it("tags already_sent from the sent key set (normalized phone key)", () => {
     const rows = [openRow("010-1111-2222", "24-06-01")];
-    const sent = new Set(["010-1111-2222|2026-06-01"]);
+    const sent = new Set(["01011112222|2026-06-01"]); // dueKey format (digits)
     expect(computeUnvisited(rows, cfg(), TODAY, sent)[0].already_sent).toBe(true);
   });
 
@@ -81,7 +82,7 @@ describe("computeUnvisited", () => {
       openRow("010-0002-0002", "24-06-01"), // term expiry 2026-06-01
       openRow("010-0003-0003", "26-01-01", { openhowx: "유심신규" }), // 유심 6mo -> 2026-07-01 (newest)
     ];
-    const sent = new Set(["010-0002-0002|2026-06-01"]); // 0002 already alerted
+    const sent = new Set(["01000020002|2026-06-01"]); // 0002 already alerted (dueKey format)
     const out = computeUnvisited(opens, cfg(), TODAY, sent);
     // unsent (0003 @2026-07-01, 0001 @2026-05-01) before sent (0002); newest expiry first within unsent
     expect(out.map((r) => r.phone)).toEqual(["010-0003-0003", "010-0001-0001", "010-0002-0002"]);

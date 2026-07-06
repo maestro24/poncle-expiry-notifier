@@ -23,6 +23,19 @@ export function normalizePhone(s: unknown): string {
   return String(s ?? "").replace(/[^0-9]/g, "");
 }
 
+/**
+ * Canonical customer/contract key: normalized(phone)|expiry. The SINGLE source of
+ * truth for every "phone|expiry" identity — DueItem.id, the sent-log dedup key, the
+ * manual-제외 key, and the cohort key. Normalizing the phone here means a customer
+ * whose number arrives hyphenated from one Poncle endpoint (미결) and bare from
+ * another (개통) still resolves to ONE key, so already_sent / 재발송 / 제외 never
+ * split across formats (double-send or silent miss). Display uses the raw phone;
+ * only keys go through here.
+ */
+export function dueKey(phone: unknown, expiry: unknown): string {
+  return `${normalizePhone(phone)}|${String(expiry ?? "").trim()}`;
+}
+
 /** Parse "yyyy-mm-dd" (tolerates "yy-mm-dd") to a local PlainDate; null if invalid. */
 export function parseKeepdate(value: string): PlainDate | null {
   const v = String(value ?? "").trim();
@@ -99,7 +112,7 @@ export function keepDueRows(rows: PoncleRow[], config: AppConfig, todayD: PlainD
 export function keepDueItem(k: KeepDueRow, openRow: PoncleRow | null): DueItem {
   const o = openRow ?? {};
   return {
-    id: `${k.phone}|${k.keepdateIso}`,
+    id: dueKey(k.phone, k.keepdateIso),
     phone: k.phone,
     customer: field(o, "customer") || k.name,
     opendate: field(o, "opendate"),
