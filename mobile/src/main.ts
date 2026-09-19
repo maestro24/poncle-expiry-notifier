@@ -322,8 +322,8 @@ function openConfirm(item: DueItem): void {
 }
 
 /**
- * 즉시 발송(optimistic): 기록 + 홈 처리 후 바로 닫고, 실제 전송은 백그라운드로.
- * 전송이 실패하면 기록을 되돌리고 고객을 다시 홈에 미발송으로 복귀시킨다.
+ * 확인 모달을 바로 닫고 발송한다. 발송 성공(네이티브가 SmsManager 인계에 성공) 직후
+ * 이력에 기록하고 홈/캐시를 갱신한다. 발송이 즉시 실패하면 기록하지 않는다.
  */
 async function doConfirmSend(): Promise<void> {
   const item = confirmItem;
@@ -372,12 +372,12 @@ async function doConfirmSend(): Promise<void> {
     return;
   }
 
-  // Deliver ON — send FIRST, record ONLY after the carrier confirms. Recording
-  // before the send (the old optimistic path) meant a mid-send app kill could leave
-  // a "발송됨" record for a message that never went out — the customer would then be
-  // silently dropped from every future scan (already_sent) and never re-alerted.
-  // Send-then-record can only ever fail the other way (sent but not recorded), which
-  // is visible (a possible duplicate next scan) rather than a silent 영구 miss.
+  // Deliver ON — send FIRST, record right after the native layer accepts the SMS.
+  // Recording before the send could leave a "발송됨" record for a message that never
+  // went out (customer silently dropped from every future scan). The native send()
+  // resolves at hand-off to SmsManager (milliseconds), NOT after the carrier's
+  // delivery report, so the send→record gap is too short for the app to be killed
+  // in between (a long wait there used to lose the record while the SMS still left).
   toast("문자 보내는 중…");
   try {
     await sendSms(item.phone, text);

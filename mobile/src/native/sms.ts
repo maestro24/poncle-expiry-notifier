@@ -6,8 +6,9 @@
 import { registerPlugin } from "@capacitor/core";
 
 export interface SmsPlugin {
-  /** Send an SMS to `phone` with `text`. Rejects if the permission is denied or
-   *  the send fails. */
+  /** Send an SMS to `phone` with `text`. Resolves once the OS accepts the message
+   *  for sending (not after carrier delivery). Rejects if the permission is denied
+   *  or the hand-off fails immediately. */
   send(options: { phone: string; text: string }): Promise<void>;
   /** Whether SEND_SMS is currently granted. */
   checkPermission(): Promise<{ granted: boolean }>;
