@@ -136,6 +136,13 @@ export function searchFieldFor(query: string): { s: string; q: string } {
   return { s: "openphone", q: digits };
 }
 
+/** 미결 page size. Poncle only honors certain sizes (10/20/30/50/100/500…): 1000
+ *  came back as 500 rows on PC and far fewer in the app's session, and the old
+ *  "short page = last page" rule then dropped most 유지일 (2026-11-17: today's
+ *  요금제 유지 customer missing, Pass B used for everyone else). 100 is the size
+ *  the open list already pages with successfully. */
+export const PENDING_PAGE_SIZE = 100;
+
 /** Query params for /pending/listPending filtered to 요금제유지 (gubun=2). */
 function pendingParams(start: number, scale: number): Record<string, string> {
   return {
@@ -218,17 +225,19 @@ export class PoncleClient {
 
   /** All 요금제유지 미결 rows (gubun=2), paged. Small set; carries the 유지일. */
   async fetchPending(): Promise<PoncleRow[]> {
-    const scale = 1000;
+    const scale = PENDING_PAGE_SIZE;
     const collected: PoncleRow[] = [];
     let start = 0;
-    const maxPages = this.cap(50); // safety cap
+    const maxPages = this.cap(100); // safety cap (100 x 100 rows)
     for (let i = 0; ; i++) {
       const res = await this.getPending(pendingParams(start, scale));
       for (const r of res.list) collected.push(r);
-      start += scale;
-      // A short page is the last one (as before); a full page continues even when
-      // the total is unparseable.
-      if (res.list.length < scale || !hasMorePages(res.list.length, scale, start, res.total)) break;
+      // Advance by the rows actually returned: Poncle caps / rewrites page sizes
+      // it does not support, so a page shorter than asked is NOT the last one
+      // while the server total says more (only an unknown total falls back to
+      // "a full page means more").
+      start += res.list.length;
+      if (!hasMorePages(res.list.length, scale, start, res.total)) break;
       if (i + 1 >= maxPages) {
         this.noteTruncated("listPending", maxPages);
         break;

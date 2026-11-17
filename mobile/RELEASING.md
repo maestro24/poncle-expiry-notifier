@@ -232,7 +232,7 @@ Path to 159+ (current Firefox), in this order:
    - `versionName "1.0.1"`  (this is what the updater compares)
    - `versionCode 2`        (must strictly increase each release)
 
-   Current: **1.2.17 / versionCode 30** (1.2.16 was 29 — the published tag).
+   Current: **1.2.18 / versionCode 31** (1.2.17 was 30 — the published tag).
    If anything in `assets/poncle-ext/` changed, bump its manifest version too
    and run `node scripts/poncle-ext-lock.mjs` (see Toolchain).
 

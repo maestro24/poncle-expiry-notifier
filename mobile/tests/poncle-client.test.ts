@@ -325,7 +325,33 @@ describe("paging survives an unparseable / zero total (improvement 3-7)", () => 
     const calls: Array<Record<string, string>> = [];
     const out = await new PoncleClient(pagedGw(many, 0, calls), cfg()).fetchPending();
     expect(out.length).toBe(1500);
-    expect(calls.length).toBe(2);
+    expect(calls.length).toBe(16); // 15 full pages of 100 + the empty page that ends it
+  });
+
+  it("fetchPending asks for a page size Poncle honors (100, not 1000)", async () => {
+    const calls: Array<Record<string, string>> = [];
+    await new PoncleClient(pagedGw([], 0, calls), cfg()).fetchPending();
+    expect(calls[0]?.scale).toBe("100");
+  });
+
+  it("fetchPending keeps paging when the server returns fewer rows than asked but total says more", async () => {
+    // Poncle caps / rewrites unsupported sizes (scale=1000 -> 500 rows, 300 -> 10):
+    // a short page is NOT the last one while start < total (2026-11-17: 미결 661건 중
+    // 일부만 받아 오늘 유지일 고객이 빠짐).
+    const all = Array.from({ length: 661 }, (_, i) => row(`k${i}`, `p${i}`, "24-06-15"));
+    const calls: Array<Record<string, string>> = [];
+    const capped = {
+      check: async () => true,
+      listOpen: async () => ({ ok: true, total: 0, list: [] }),
+      listPending: async (p: Record<string, string>) => {
+        calls.push(p);
+        const start = Number(p.start);
+        return { ok: true, total: 661, list: all.slice(start, start + Math.min(Number(p.scale), 30)) };
+      },
+    };
+    const out = await new PoncleClient(capped, cfg()).fetchPending();
+    expect(out.length).toBe(661);
+    expect(new Set(out.map(rowKey)).size).toBe(661);
   });
 
   it("the page cap still applies and reports the truncation", async () => {
