@@ -37,6 +37,15 @@ export const MILESTONE_SOURCES = ["keepdate", "term"] as const;
 export type MilestoneSource = (typeof MILESTONE_SOURCES)[number];
 
 /**
+ * What a stored send record was for: a milestone (keepdate/term), or "manual" — a
+ * 직접 입력 send to a customer who is NOT at a milestone (조회 '여유'/'재계약 완료').
+ * A manual record never satisfies a milestone (audit B1); it only shows in the
+ * 조회 '안내 이력' and the 발송 이력.
+ */
+export const RECORD_SOURCES = ["keepdate", "term", "manual"] as const;
+export type RecordSource = (typeof RECORD_SOURCES)[number];
+
+/**
  * A user-defined outbound message template with optional conditions. When
  * "알림 보내기" runs, the templates whose conditions match the customer's
  * telecom + 상태 are offered; if several match the staff picks one, if none
@@ -75,7 +84,20 @@ export interface AppConfig {
   unvisited_lookback_months: number;
   page_size: number;
   request_timeout_sec: number;
+  /** 설정 > 문자 발송 테스트의 '내 번호'. 홈의 테스트 대상도 이 번호로만 보낸다.
+   *  Optional: configs saved before this field existed simply have none. */
+  test_phone?: string;
 }
+
+/**
+ * A customer's send state from the stored 안내 이력 record (by phone|expiry):
+ * - "none": no record.
+ * - "sent": a real SMS handed to the OS and not reported failed (handled).
+ * - "skipped": manually handled/excluded (handled, but not a real send).
+ * - "recorded": practice-mode record only — NOT sent; still needs a real send.
+ * - "failed": the native layer reported the SMS failed — NOT sent; resend needed.
+ */
+export type SentState = "none" | "sent" | "skipped" | "recorded" | "failed";
 
 /** A due customer, ready for display and sending. Mirrors scan._entry_from_row. */
 export interface DueItem {
@@ -91,9 +113,33 @@ export interface DueItem {
   plan: string;
   model: string;
   staff: string;
+  /** True when handled: a real (not failed) SMS, or a manual skip. Practice
+   *  (record-only) and failed sends are NOT handled. */
   already_sent: boolean;
-  /** Injected test row (010-1234-5678): exempt from dedup, never recorded. */
+  /** Finer state from the stored record (badge text); filled by the app layer. */
+  sent_state?: SentState;
+  /** Injected test row (설정의 내 번호로): exempt from dedup, never recorded or cached. */
   test?: boolean;
   /** Which scan pass produced this item: 요금제 유지(keepdate) vs 약정 만료(term). */
   source?: MilestoneSource;
+  /** True when the 미결(유지일) fetch failed for this scan and the item was derived
+   *  without it (개통+기본 개월), so its date may be wrong — the caller should warn
+   *  and block sending it until a normal scan. Absent = trustworthy. */
+  degraded?: boolean;
+}
+
+/**
+ * What identifies a customer's contract milestone for send-state matching: the
+ * exact key is normalized(phone)|expiry_date; when that misses, a record of the
+ * SAME contract (phone + opendate) and the same stage (source) still matches even
+ * if its expiry was computed with different settings (약정 개월 changed).
+ * DueItem and LookupResult both satisfy this shape.
+ */
+export interface SentMatchTarget {
+  phone: string;
+  expiry_date: string;
+  opendate?: string;
+  openhow?: string;
+  /** "manual" (a stored manual record) never matches a milestone. */
+  source?: RecordSource;
 }

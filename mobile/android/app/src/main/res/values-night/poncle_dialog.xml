@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dark-mode variant of the login WebView's alert/confirm dialog. -->
+<resources>
+    <color name="poncle_dialog_surface">#1F2023</color>
+    <color name="poncle_dialog_ink">#F2F3F5</color>
+    <color name="poncle_dialog_ink2">#C9CBD0</color>
+    <color name="poncle_dialog_accent">#60A5FA</color>
+
+    <style name="PoncleDialog" parent="android:Theme.Material.Dialog.Alert">
+        <item name="android:windowBackground">@drawable/poncle_dialog_bg</item>
+        <item name="android:colorAccent">@color/poncle_dialog_accent</item>
+        <item name="android:textColorPrimary">@color/poncle_dialog_ink</item>
+        <item name="android:textColorSecondary">@color/poncle_dialog_ink2</item>
+        <item name="android:textColorAlertDialogListItem">@color/poncle_dialog_ink</item>
+    </style>
+</resources>

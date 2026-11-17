@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "sync": "cap sync android",
     "open:android": "cap open android",
-    "apk": "cap sync android && cd android && ./gradlew assembleDebug"
+    "apk": "npm run build && npx cap sync android && cd android && ./gradlew assembleRelease",
+    "release:verify": "node scripts/verify-release.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^7.0.0",

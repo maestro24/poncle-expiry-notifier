@@ -1,0 +1,23 @@
+{
+  "manifest_version": 2,
+  "name": "poncle-bridge",
+  "version": "1.0.5",
+  "description": "Built-in bridge between the app and its own Poncle pages (GeckoHost). Bump version on EVERY change to this folder: GeckoView ensureBuiltIn() keeps an installed copy with the same version.",
+  "browser_specific_settings": { "gecko": { "id": "poncle-bridge@poncleexpiry" } },
+  "background": { "scripts": ["background.js"] },
+  "content_scripts": [
+    {
+      "matches": ["https://m.poncle.co.kr/*"],
+      "js": ["content.js"],
+      "run_at": "document_end",
+      "all_frames": false
+    }
+  ],
+  "permissions": [
+    "nativeMessaging",
+    "nativeMessagingFromContent",
+    "geckoViewAddons",
+    "cookies",
+    "https://m.poncle.co.kr/*"
+  ]
+}

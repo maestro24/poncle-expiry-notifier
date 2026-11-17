@@ -6,7 +6,9 @@
 import { registerPlugin } from "@capacitor/core";
 
 export interface AppUpdatePlugin {
-  getVersion(): Promise<{ version: string }>;
+  /** sdkInt = Build.VERSION.SDK_INT (native builds from 1.2.17; absent on the
+   *  web fallback and older builds). */
+  getVersion(): Promise<{ version: string; sdkInt?: number }>;
   openUrl(options: { url: string }): Promise<void>;
 }
 
@@ -19,3 +21,22 @@ export const AppUpdate = registerPlugin<AppUpdatePlugin>("AppUpdate", {
     },
   }),
 });
+
+/** Cached device SDK level: it never changes while the app runs. */
+let sdkIntPromise: Promise<number | undefined> | null = null;
+
+/**
+ * The device's Android API level (Build.VERSION.SDK_INT), or undefined when the
+ * native layer doesn't report it (web preview, older native build). Used to skip
+ * an update this phone can't install (B15) and the double copy toast (D4).
+ */
+export function getDeviceSdkInt(): Promise<number | undefined> {
+  sdkIntPromise ??= AppUpdate.getVersion().then(
+    (r) => {
+      const n = Number((r as { sdkInt?: unknown }).sdkInt);
+      return Number.isInteger(n) && n > 0 ? n : undefined;
+    },
+    () => undefined,
+  );
+  return sdkIntPromise;
+}

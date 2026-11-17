@@ -25,6 +25,17 @@ describe("sentTrend", () => {
     expect(t.every((d) => typeof d.dayLabel === "string" && d.dayLabel.length === 1)).toBe(true);
   });
 
+  it("counts only real sends: record-only (practice) and failed sms are excluded (audit 1-2)", () => {
+    const rows = [
+      rec("2026-07-03"),
+      rec("2026-07-03", "record-only"),
+      { ...rec("2026-07-03"), delivery: "failed" },
+      { ...rec("2026-07-03"), delivery: "delivered" },
+    ];
+    const t = sentTrend(rows, TODAY, 7);
+    expect(t[t.length - 1].count).toBe(2);
+  });
+
   it("empty history -> all zeros", () => {
     expect(sentTrend([], TODAY, 7).map((d) => d.count)).toEqual([0, 0, 0, 0, 0, 0, 0]);
   });

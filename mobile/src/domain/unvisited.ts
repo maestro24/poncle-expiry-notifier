@@ -13,16 +13,45 @@
  * widened open fetch the due scan already made.
  */
 import { entryFromRow, field } from "./due-item";
-import { computeExpiry, unvisitedFloor } from "./expiry";
-import { dueKey, normalizePhone } from "./keepdate";
+import { computeExpiry, isNewerOpenRow, unvisitedFloor } from "./expiry";
+import { currentKeepdates, dueKey, normalizePhone } from "./keepdate";
 import { PlainDate, daysBetween } from "./plaindate";
 import { isContractType } from "./template-match";
-import type { AppConfig, DueItem, PoncleRow } from "./types";
+import type { AppConfig, DueItem, PoncleRow, SentMatchTarget } from "./types";
+
+/** Anything that can decide "already handled" for a target (History's SentIndex). */
+export interface SentMatcher {
+  isHandled(t: SentMatchTarget): boolean;
+}
+/** Exact handled key set (legacy) or a SentIndex (exact + same-contract fallback). */
+export type SentLookup = ReadonlySet<string> | SentMatcher;
+
+/** True when `item` is handled per `sent` (item.id must already be its dueKey). */
+export function isSentIn(sent: SentLookup, item: DueItem): boolean {
+  return "isHandled" in sent ? sent.isHandled(item) : sent.has(item.id);
+}
+
+/**
+ * The customer's representative 만료 for 조회/미방문: 약정 대상 = 약정 만료(개통+약정
+ * 개월); 유심 등 = 요금제 유지 — the CURRENT contract's 폰클 유지일 when one exists
+ * (`keepdates` from currentKeepdates), else 개통+기본 개월. Using the 유지일 keeps the
+ * key identical to the home Pass A item (audit 1-9/1-10). null = 무약정/opendate 불명.
+ */
+export function representativeExpiry(
+  row: PoncleRow,
+  config: AppConfig,
+  keepdates?: ReadonlyMap<string, PlainDate>,
+): PlainDate | null {
+  const base = computeExpiry(row, config);
+  if (base === null || isContractType(field(row, "openhowx"))) return base;
+  return keepdates?.get(normalizePhone(field(row, "openphone"))) ?? base;
+}
 
 /**
  * Group open rows by (digits) phone, keeping the row with the latest opendate —
- * the customer's current contract. 'yy-mm-dd' sorts lexically within the 2000s,
- * matching PoncleClient.fetchOpenByPhone.
+ * the customer's current contract. Dates are compared PARSED (isNewerOpenRow, U1),
+ * so mixed 'yy-mm-dd'/'yyyy-mm-dd' text can't pick an older 개통 and a same-day tie
+ * goes to the higher Poncle idx; same rule as PoncleClient.fetchOpenByPhone.
  */
 export function latestOpenByPhone(openRows: PoncleRow[]): Map<string, PoncleRow> {
   const map = new Map<string, PoncleRow>();
@@ -30,7 +59,7 @@ export function latestOpenByPhone(openRows: PoncleRow[]): Map<string, PoncleRow>
     const phone = normalizePhone(field(r, "openphone"));
     if (!phone) continue;
     const prev = map.get(phone);
-    if (!prev || field(r, "opendate") > field(prev, "opendate")) map.set(phone, r);
+    if (!prev || isNewerOpenRow(r, prev)) map.set(phone, r);
   }
   return map;
 }
@@ -46,24 +75,29 @@ function expiredWithinLookback(expiry: PlainDate, todayD: PlainDate, floor: Plai
  * (no computable 만료) rows are skipped. `source` is set so a 미방문 알림 routes to
  * the right template (약정 대상 -> term/T2, 그 외 -> keepdate/T1). Manual 제외
  * overrides are applied by the caller (History.handledKeys). Unsent first, then
- * most-recently-expired first.
+ * most-recently-expired first. `pendingRows` (the scan's 요금제유지 미결) makes a 유심
+ * customer's 대표 만료 the 폰클 유지일, matching the home key. `milestone_offset` here
+ * is the D+ count (days since expiry, positive); {when} is re-derived from expiry.
  */
 export function computeUnvisited(
   openRows: PoncleRow[],
   config: AppConfig,
   todayD: PlainDate,
-  sentKeys: Set<string>,
+  sent: SentLookup,
+  pendingRows: PoncleRow[] = [],
 ): DueItem[] {
   const floor = unvisitedFloor(config, todayD);
+  const latest = latestOpenByPhone(openRows);
+  const keepdates = currentKeepdates(pendingRows, latest);
   const out: DueItem[] = [];
-  for (const [, row] of latestOpenByPhone(openRows)) {
-    const expiry = computeExpiry(row, config);
+  for (const [, row] of latest) {
+    const expiry = representativeExpiry(row, config, keepdates);
     if (expiry === null) continue; // 무약정 / opendate 불명
     if (!expiredWithinLookback(expiry, todayD, floor)) continue;
     const item = entryFromRow(row, daysBetween(todayD, expiry), expiry); // offset = D+
     item.source = isContractType(field(row, "openhowx")) ? "term" : "keepdate";
     item.id = dueKey(item.phone, item.expiry_date);
-    item.already_sent = sentKeys.has(item.id);
+    item.already_sent = isSentIn(sent, item);
     out.push(item);
   }
   return out.sort((a, b) => {

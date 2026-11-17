@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- In-app styled dialog for Poncle's alert()/confirm() in the login WebView
+     (PoncleLoginActivity.showJsDialog). Mirrors the web app's .modal card:
+     white surface, 18dp corners, ink text, app-blue (#2563EB) buttons.
+     values-night/ overrides the colors + parent for dark mode. -->
+<resources>
+    <color name="poncle_dialog_surface">#FFFFFF</color>
+    <color name="poncle_dialog_ink">#1A1A1A</color>
+    <color name="poncle_dialog_ink2">#3A3C40</color>
+    <color name="poncle_dialog_accent">#2563EB</color>
+
+    <style name="PoncleDialog" parent="android:Theme.Material.Light.Dialog.Alert">
+        <item name="android:windowBackground">@drawable/poncle_dialog_bg</item>
+        <item name="android:colorAccent">@color/poncle_dialog_accent</item>
+        <item name="android:textColorPrimary">@color/poncle_dialog_ink</item>
+        <item name="android:textColorSecondary">@color/poncle_dialog_ink2</item>
+        <item name="android:textColorAlertDialogListItem">@color/poncle_dialog_ink</item>
+    </style>
+</resources>

@@ -84,9 +84,20 @@ export function templateMatches(item: Matchable, tpl: MessageTemplate): boolean 
   return telOk && stOk && srcOk;
 }
 
-/** Templates that match the item, preserving list order (first = highest priority). */
+/** How specific a template is: the number of non-wildcard condition groups (0-3). */
+export function templateSpecificity(tpl: MessageTemplate): number {
+  return [tpl.telecoms, tpl.statuses, tpl.sources].filter((g) => !!g?.length).length;
+}
+
+/** Templates that match the item, most specific first (more condition groups =
+ *  more specific); ties keep list order, so the user's 순서 decides among equals
+ *  (audit 1-37). [0] is the auto-selected template. Never mutates the input. */
 export function matchingTemplates(item: Matchable, templates: MessageTemplate[]): MessageTemplate[] {
-  return (templates ?? []).filter((t) => templateMatches(item, t));
+  return (templates ?? [])
+    .map((t, i) => ({ t, i, s: templateSpecificity(t) }))
+    .filter(({ t }) => templateMatches(item, t))
+    .sort((a, b) => b.s - a.s || a.i - b.i)
+    .map(({ t }) => t);
 }
 
 const SOURCE_LABEL: Record<MilestoneSource, string> = { keepdate: "요금제 유지", term: "약정 만료" };

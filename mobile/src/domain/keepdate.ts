@@ -7,15 +7,18 @@
  * fetching + joining is orchestrated in scan.ts.
  */
 import { lookAheadDays } from "./expiry";
+import { htmlUnescape } from "./html-entities";
 import { PlainDate, daysBetween, makeDate, toIso } from "./plaindate";
 import type { AppConfig, DueItem, PoncleRow } from "./types";
 
 /** Poncle 미결 gubunx value that carries the 요금제 유지일. */
 export const KEEP_GUBUNX = "요금제유지";
 
+/** Raw Poncle field -> trimmed, entity-decoded text (same boundary rule as
+ *  due-item.field; kept local to avoid an import cycle). */
 function field(row: PoncleRow, name: string): string {
   const v = row[name];
-  return v == null ? "" : String(v).trim();
+  return v == null ? "" : htmlUnescape(String(v)).trim();
 }
 
 /** Digits-only phone, for join + blacklist + dedup (format-insensitive). */
@@ -58,19 +61,66 @@ export function isKeepPending(row: PoncleRow): boolean {
   return field(row, "gubunx") === KEEP_GUBUNX;
 }
 
+/** The pending row's display phone (openphone, else phone). */
+function pendingPhone(r: PoncleRow): string {
+  return field(r, "openphone") || field(r, "phone");
+}
+
+/** yy-mm-dd / yyyy-mm-dd opendate -> local date (null when unknown). */
+function parseOpen(row: PoncleRow | undefined): PlainDate | null {
+  return row ? parseKeepdate(field(row, "opendate")) : null;
+}
+
 /**
- * Digits-phones of EVERY 요금제유지 pending (regardless of date or 접수/해결) — the
- * term pass blacklist. A customer with a 유지일 is judged only by that 유지일, so
- * the term calc must never surface them, even on an unrelated date.
+ * True when a 유지일 belongs to a PREVIOUS contract: the phone's current (latest)
+ * 개통 is newer than the 유지일. Such a pending must neither blacklist the current
+ * contract's 1단계 nor surface as a 1단계 itself (audit 1-16).
  */
-export function keepPhoneSet(rows: PoncleRow[]): Set<string> {
+export function isStaleKeepdate(keepdate: PlainDate, latestOpenRow: PoncleRow | null | undefined): boolean {
+  const od = parseOpen(latestOpenRow ?? undefined);
+  return od !== null && od.getTime() > keepdate.getTime();
+}
+
+/**
+ * Digits-phones whose 1단계 is judged by a 폰클 유지일 — the Pass B (개통+기본 개월)
+ * blacklist. With `latestOpen` (phone digits -> current 개통 row), only a 유지일 on/after
+ * the current contract's opendate counts: a 유지일 from an older contract no longer
+ * hides the current one forever (audit 1-16). Resolution (접수/해결) is NOT a filter:
+ * a 해결 유지일 of the current contract means 폰클 already handled that 1단계, so the
+ * default-months fallback must not message the customer again. Without `latestOpen`
+ * every 요금제유지 phone counts (legacy behavior).
+ */
+export function keepPhoneSet(rows: PoncleRow[], latestOpen?: ReadonlyMap<string, PoncleRow>): Set<string> {
   const set = new Set<string>();
   for (const r of rows) {
     if (!isKeepPending(r)) continue;
-    const p = normalizePhone(field(r, "openphone") || field(r, "phone"));
-    if (p) set.add(p);
+    const p = normalizePhone(pendingPhone(r));
+    if (!p) continue;
+    if (latestOpen) {
+      const kd = parseKeepdate(field(r, "pendingdate"));
+      if (kd === null || isStaleKeepdate(kd, latestOpen.get(p))) continue;
+    }
+    set.add(p);
   }
   return set;
+}
+
+/**
+ * Latest 유지일 per phone that belongs to the CURRENT contract (on/after the latest
+ * 개통's opendate), any 접수/해결 — the customer's representative 요금제 유지 date for
+ * 조회/미방문, so their keys match the home Pass A item (audit 1-9/1-10).
+ */
+export function currentKeepdates(rows: PoncleRow[], latestOpen: ReadonlyMap<string, PoncleRow>): Map<string, PlainDate> {
+  const out = new Map<string, PlainDate>();
+  for (const r of rows) {
+    if (!isKeepPending(r)) continue;
+    const p = normalizePhone(pendingPhone(r));
+    const kd = parseKeepdate(field(r, "pendingdate"));
+    if (!p || kd === null || isStaleKeepdate(kd, latestOpen.get(p))) continue;
+    const prev = out.get(p);
+    if (!prev || kd.getTime() > prev.getTime()) out.set(p, kd);
+  }
+  return out;
 }
 
 /** A due 유지일 pending, before joining the open row. */
@@ -78,31 +128,51 @@ export interface KeepDueRow {
   phone: string; // display phone (as Poncle returns it)
   phoneDigits: string; // normalized, for join + dedup
   keepdateIso: string; // yyyy-mm-dd
-  offset: number; // days until 유지일 (0..window)
+  offset: number; // days until 유지일 (-catchUp..window; negative = passed, D+N)
   name: string; // customer-name fallback when the open join misses
 }
 
 /**
- * 요금제유지 pendings whose 유지일 is within [today, today+window] and not resolved
- * (condx !== "해결"). Past 유지일 and resolved rows are dropped.
+ * 요금제유지 pendings whose 유지일 is within [today - catchUpDays, today+window] and
+ * not resolved (condx !== "해결"). Resolved rows, rows without a phone (they would
+ * all collapse onto one '|date' key) and older 유지일 are dropped. One row per phone:
+ * the window is applied FIRST, then when a phone still has several unresolved 유지일
+ * the LATEST one wins (audit 1-36 — a date correction leaving the old one 접수), so
+ * the same 1단계 is never offered twice; a later 유지일 OUTSIDE the window never hides
+ * a due one inside it (audit B2). `catchUpDays` (default 0 = classic) re-surfaces
+ * 유지일 that passed since the last successful scan (audit 1-4).
+ *
+ * Policy (deliberate, pinned by tests/domain-r1 B2): when the same phone also has a
+ * LATER unresolved 유지일 outside the window — possibly a 'date correction' whose old
+ * 접수 row was left behind — the in-window 유지일 is STILL offered. 폰클 data can't
+ * tell a correction from two real 유지일, and a possibly-stale alert the staff sees
+ * (the confirm sheet shows the 유지일; 해결 the old 미결 in 폰클 to drop it) is safer
+ * than the pre-B2 silent miss. Once the later 유지일 enters the window it wins.
  */
-export function keepDueRows(rows: PoncleRow[], config: AppConfig, todayD: PlainDate): KeepDueRow[] {
+export function keepDueRows(rows: PoncleRow[], config: AppConfig, todayD: PlainDate, catchUpDays = 0): KeepDueRow[] {
   const window = lookAheadDays(config);
-  const out: KeepDueRow[] = [];
+  const back = Math.max(0, Math.floor(Number(catchUpDays) || 0));
+  const latestByPhone = new Map<string, { row: PoncleRow; kd: PlainDate }>();
   for (const r of rows) {
     if (!isKeepPending(r)) continue;
     if (field(r, "condx") === "해결") continue;
     const kd = parseKeepdate(field(r, "pendingdate"));
-    if (kd === null) continue;
+    const digits = normalizePhone(pendingPhone(r));
+    if (kd === null || !digits) continue;
     const offset = daysBetween(kd, todayD); // 유지일 - today
-    if (offset < 0 || offset > window) continue;
-    const display = field(r, "openphone") || field(r, "phone");
+    if (offset < -back || offset > window) continue; // window first (B2)
+    const prev = latestByPhone.get(digits);
+    if (!prev || kd.getTime() > prev.kd.getTime()) latestByPhone.set(digits, { row: r, kd });
+  }
+  const out: KeepDueRow[] = [];
+  for (const [digits, { row, kd }] of latestByPhone) {
+    const offset = daysBetween(kd, todayD);
     out.push({
-      phone: display,
-      phoneDigits: normalizePhone(display),
+      phone: pendingPhone(row),
+      phoneDigits: digits,
       keepdateIso: toIso(kd),
       offset,
-      name: field(r, "name") || field(r, "customer"),
+      name: field(row, "name") || field(row, "customer"),
     });
   }
   return out;

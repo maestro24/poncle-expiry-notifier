@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+ (API 31+) backup / device-transfer rules; ignored on Android 11
+     and older. See the policy comment on <application> in AndroidManifest.xml.
+     cloud-backup: allowBackup="false" already disables it; excluding every domain
+     here is a second line of defence (customer data + credentials never go to the
+     cloud).
+     device-transfer: NOT disabled by allowBackup="false" for targetSdk >= 31, so
+     everything not excluded below moves to the new phone: CapacitorStorage.xml
+     (config, templates, cached due / unvisited lists with customer names and
+     numbers, the pre-1.2.17 send history copy), poncle_durable_kv.xml (the send
+     history since 1.2.17) and poncle_sms_results.xml (unacknowledged carrier
+     results) - deliberately, so already-texted customers are not texted again.
+     The Poncle login, the persisted session cookies, the GeckoView profile
+     (files/mozilla/: Gecko's live cookie jar) and the System WebView data dir
+     (app_webview/: the app UI WebView; its WebView-era Poncle cookies are
+     deleted by 1.2.17) stay behind. The cache dir is never part of a transfer. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="poncle_creds.xml" />
+        <exclude domain="sharedpref" path="poncle_cookie.xml" />
+        <exclude domain="root" path="app_webview/" />
+        <exclude domain="file" path="mozilla/" />
+    </device-transfer>
+</data-extraction-rules>

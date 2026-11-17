@@ -74,9 +74,13 @@ describe("pickAndroidUpdate", () => {
 });
 
 describe("isTrustedApkUrl", () => {
-  it("accepts github.com and githubusercontent hosts", () => {
-    expect(isTrustedApkUrl("https://github.com/o/r/releases/download/t/a.apk")).toBe(true);
-    expect(isTrustedApkUrl("https://objects.githubusercontent.com/x/a.apk")).toBe(true);
+  // Updated for audit L34: any github.com path or a bare githubusercontent CDN URL
+  // used to pass; only this repo's https release download is trusted now.
+  it("accepts this repo's https release download only", () => {
+    expect(isTrustedApkUrl(`${GH}/t/a.apk`)).toBe(true);
+    expect(isTrustedApkUrl("https://github.com/o/r/releases/download/t/a.apk", "o/r")).toBe(true);
+    expect(isTrustedApkUrl("https://github.com/o/r/releases/download/t/a.apk")).toBe(false);
+    expect(isTrustedApkUrl("https://objects.githubusercontent.com/x/a.apk")).toBe(false);
   });
   it("rejects other hosts and junk", () => {
     expect(isTrustedApkUrl("https://evil.example.com/a.apk")).toBe(false);

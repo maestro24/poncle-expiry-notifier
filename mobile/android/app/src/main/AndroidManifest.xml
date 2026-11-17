@@ -1,8 +1,38 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Backup / transfer policy (audit Low "D2D 이전 미차단"). targetSdk is 35, so:
+         - Android 12+ (API 31+): data_extraction_rules.xml governs; fullBackupContent
+           is ignored. allowBackup="false" turns CLOUD backup off, but for apps
+           targeting 31+ it does NOT turn off device-to-device transfer (the
+           user-initiated "copy from old phone" flow). D2D therefore copies every
+           app file EXCEPT the <device-transfer> excludes: CapacitorStorage.xml
+           (config, templates, the cached due / unvisited lists, i.e. customer
+           names and phone numbers, and the pre-1.2.17 copy of the send history),
+           poncle_durable_kv.xml (the send history since 1.2.17, written with
+           commit() by DurableKVPlugin) and poncle_sms_results.xml
+           (unacknowledged carrier results) move to the new phone - on purpose,
+           so already-texted customers are not texted again. The Poncle login
+           (poncle_creds.xml), the persisted session cookies (poncle_cookie.xml),
+           the GeckoView profile (files/mozilla/: Gecko's live cookie jar) and the
+           System WebView data dir (app_webview/) stay behind; the KeyStore master
+           key could not move anyway. app_webview/ is the CURRENT data dir of the
+           app's own UI WebView (Capacitor; its state lives in CapacitorStorage,
+           not there). Up to v1.2.16 it also held the WebView-era Poncle login
+           cookies (e.g. the 2-year SCALE cookie); 1.2.17 deletes those once on
+           first start and again on logout (PonclePlugin, CookieManager
+           .removeAllCookies). The cache dir (exported CSV / backup files) is
+           never transferred.
+         - Android 6-11 (API 23-30): allowBackup="false" disables cloud backup, D2D
+           and adb backup outright. backup_rules.xml (fullBackupContent) is inert
+           while allowBackup is false; it only pre-sets the same exclusions in case
+           allowBackup is ever flipped.
+         - OEM migration tools (e.g. Samsung Smart Switch) may use their own path;
+           verify on a real device before relying on either behaviour. -->
     <application
         android:allowBackup="false"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -12,6 +42,7 @@
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation"
             android:name=".MainActivity"
+            android:windowSoftInputMode="adjustResize"
             android:label="@string/title_activity_main"
             android:theme="@style/AppTheme.NoActionBarLaunch"
             android:launchMode="singleTask"
@@ -24,10 +55,21 @@
 
         </activity>
 
+        <!-- configChanges: rotation / dark-mode / keyboard changes must NOT
+             recreate the login screen — that reset the typed id/password, the
+             solved reCAPTCHA and the autofill guard (audit Low). The GeckoView
+             relayouts itself (onConfigurationChanged forwards to the runtime). -->
         <activity
             android:name=".PoncleLoginActivity"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation"
             android:exported="false"
             android:label="폰클 로그인" />
+
+        <!-- Carrier "sent" result for each SMS part (explicit PendingIntent from
+             SmsPlugin). Not exported: only this app's PendingIntents reach it. -->
+        <receiver
+            android:name=".SmsSentReceiver"
+            android:exported="false" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

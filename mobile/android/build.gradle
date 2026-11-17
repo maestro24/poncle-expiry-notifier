@@ -7,7 +7,7 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        classpath 'com.android.tools.build:gradle:8.7.2'
+        classpath 'com.android.tools.build:gradle:8.12.3'
         classpath 'com.google.gms:google-services:4.4.2'
 
         // NOTE: Do not place your application dependencies here; they belong
@@ -21,9 +21,16 @@ allprojects {
     repositories {
         google()
         mavenCentral()
+        // GeckoView (the embedded Firefox engine used for the Poncle login and
+        // session, see GeckoHost) is published only on Mozilla's own Maven.
+        // Restricted to that one group so no other dependency can resolve from it.
+        maven {
+            url 'https://maven.mozilla.org/maven2/'
+            content { includeGroup 'org.mozilla.geckoview' }
+        }
     }
 }
 
 task clean(type: Delete) {
-    delete rootProject.buildDir
+    delete rootProject.layout.buildDirectory
 }

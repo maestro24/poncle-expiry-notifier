@@ -5,19 +5,43 @@
  * is a separate, explicit per-row action (sender.ts).
  */
 import { COHORT_WINDOW_DAYS, updateCohort } from "./cohort";
-import { entryFromRow, field } from "./due-item";
-import { contractTermMonths, keepdateDefaultMonths, milestoneDue, scanOpenDateBounds } from "./expiry";
+import { entryFromRow, field, sortDueItems } from "./due-item";
+import {
+  catchUpCapped,
+  catchUpDaysSince,
+  contractTermMonths,
+  keepdateDefaultMonths,
+  milestoneDue,
+  scanOpenDateBounds,
+} from "./expiry";
 import type { History } from "./history";
-import { dueKey, keepDueItem, keepDueRows, keepPhoneSet } from "./keepdate";
+import { dueKey, isStaleKeepdate, keepDueItem, keepDueRows, keepPhoneSet, parseKeepdate } from "./keepdate";
 import { NetworkError, PoncleClient, PoncleGateway, SessionExpired } from "./poncle-client";
 import { PlainDate, today } from "./plaindate";
 import { isContractType } from "./template-match";
 import type { AppConfig, DueItem, PoncleRow } from "./types";
 import { computeUnvisited, latestOpenByPhone } from "./unvisited";
 
+/** Optional scan inputs from the app layer. */
+export interface ScanOptions {
+  /**
+   * ISO yyyy-mm-dd of the LAST SUCCESSFUL scan (History.getDueCacheDate()). When
+   * given, milestones that passed since that day (inclusive, capped at
+   * CATCH_UP_MAX_DAYS) are included with a NEGATIVE milestone_offset (D+N, overdue),
+   * so a 1단계/유지일 that fell on a closed day is not lost (audit 1-4). Omitted or ""
+   * -> no catch-up (classic behavior).
+   */
+  sinceDate?: string;
+  /** Override the Poncle paging safety cap (tests). Omitted -> client defaults. */
+  maxPages?: number;
+}
+
 export { entryFromRow } from "./due-item";
 
-export type ScanState = "idle" | "scanning" | "session_expired" | "error";
+/** Shown when ScanResult.truncated: the list may be missing customers. */
+export const SCAN_TRUNCATED_MESSAGE = "폰클 목록이 너무 많아 일부만 불러왔습니다 — 결과가 빠졌을 수 있으니 잠시 후 다시 스캔해 주세요";
+
+export type ScanState ="idle" | "scanning" | "session_expired" | "error";
 
 export interface ScanResult {
   status: "ok" | "session_expired" | "error";
@@ -29,6 +53,13 @@ export interface ScanResult {
    *  The due list still stands, but the 미방문 blacklist is missing, so the caller
    *  must NOT overwrite the persisted 미방문 cache with this scan's list. */
   pendingDegraded: boolean;
+  /** True when a paging safety cap stopped a fetch that still had full pages, so
+   *  the lists may be incomplete (audit 3-7). Only set on status "ok". */
+  truncated?: boolean;
+  /** True when `sinceDate` was older than CATCH_UP_MAX_DAYS, so milestones that
+   *  passed before the cap were not re-surfaced (I3) — the caller should point the
+   *  staff to the 미방문 list. Only set on status "ok". */
+  catchUpCapped?: boolean;
   targets: number;
   sent: number;
   pending: number;
@@ -59,9 +90,11 @@ export async function runScan(
   cfg: AppConfig,
   history: History,
   todayD: PlainDate = today(),
+  opts: ScanOptions = {},
 ): Promise<ScanResult> {
   const empty = { results: [] as DueItem[], unvisited: [] as DueItem[], pendingDegraded: false, targets: 0, sent: 0, pending: 0 };
-  const client = new PoncleClient(gw, cfg);
+  const client = new PoncleClient(gw, cfg, opts.maxPages !== undefined ? { maxPages: opts.maxPages } : {});
+  const catchUp = catchUpDaysSince(opts.sinceDate ?? "", todayD);
 
   // Fetch the 요금제유지 미결 FIRST so the term-pass blacklist is accurate. A real
   // logout surfaces (session_expired); any other pending failure degrades to
@@ -76,12 +109,11 @@ export async function runScan(
     pendingRows = [];
     pendingDegraded = true; // 미방문 blacklist is now empty -> don't trust/persist unvisited
   }
-  const blacklist = keepPhoneSet(pendingRows);
-  const keepRows = keepDueRows(pendingRows, cfg, todayD);
+  const keepRows = keepDueRows(pendingRows, cfg, todayD, catchUp);
 
   // Open list (pass 2 source; the join source for pass 1; and — via the widened
   // look-back bounds — the 미방문 source). One fetch feeds all three.
-  const bounds = scanOpenDateBounds(cfg, todayD);
+  const bounds = scanOpenDateBounds(cfg, todayD, catchUp);
   let openRows: PoncleRow[];
   try {
     openRows = await client.fetchCandidates(bounds);
@@ -89,14 +121,24 @@ export async function runScan(
     return errorResult(e, empty)!;
   }
 
+  // A paging cap cut a fetch short (L4): the 유지일 blacklist / expired set may be
+  // incomplete, exactly like a failed 미결 fetch -> flag Pass B dates and don't
+  // persist the cohort from it. `pendingDegraded` (reported) stays the fetch failure.
+  const unreliable = pendingDegraded || client.truncated;
+
   // Latest 개통 per phone = the customer's current contract (drives the milestones).
   const latestOpen = latestOpenByPhone(openRows);
+  // Pass B blacklist: only 유지일 of the CURRENT contract (audit 1-16).
+  const blacklist = keepPhoneSet(pendingRows, latestOpen);
 
   // Pass A — 요금제 유지 (1단계) from 폰클 유지일. Join type/telecom from the latest
   // opens, else a targeted per-phone lookup (few — 유지일 customers opened outside window).
   const keepItems: DueItem[] = [];
   for (const k of keepRows) {
     let openRow = latestOpen.get(k.phoneDigits) ?? null;
+    // A 유지일 that predates the current 개통 belongs to a previous contract.
+    const kd = parseKeepdate(k.keepdateIso);
+    if (openRow !== null && kd !== null && isStaleKeepdate(kd, openRow)) continue;
     if (openRow === null) {
       try {
         openRow = await client.fetchOpenByPhone(k.phone);
@@ -112,10 +154,13 @@ export async function runScan(
   const stage1Default: DueItem[] = [];
   for (const [phone, row] of latestOpen) {
     if (blacklist.has(phone)) continue; // 폰클 유지일 있음 -> Pass A가 처리
-    const due = milestoneDue(field(row, "opendate"), keepDefault, cfg, todayD);
+    const due = milestoneDue(field(row, "opendate"), keepDefault, cfg, todayD, catchUp);
     if (!due) continue;
     const item = entryFromRow(row, due[0], due[1]);
     item.source = "keepdate";
+    // Without the 미결 list we can't tell whether this customer has a 폰클 유지일, so
+    // the 개통+기본 개월 date may be wrong (audit 1-30): flag it for the caller.
+    if (unreliable) item.degraded = true;
     stage1Default.push(item);
   }
 
@@ -124,7 +169,7 @@ export async function runScan(
   const termItems: DueItem[] = [];
   for (const [, row] of latestOpen) {
     if (!isContractType(field(row, "openhowx"))) continue;
-    const due = milestoneDue(field(row, "opendate"), termMonths, cfg, todayD);
+    const due = milestoneDue(field(row, "opendate"), termMonths, cfg, todayD, catchUp);
     if (!due) continue;
     const item = entryFromRow(row, due[0], due[1]);
     item.source = "term";
@@ -144,45 +189,61 @@ export async function runScan(
   }
   const results = Array.from(byKey.values());
 
-  // already_sent + id (dedup on normalized phone|expiry), loaded once.
-  const sentKeys = await history.dedupKeySet();
+  // already_sent + id (normalized phone|expiry), loaded once. The SentIndex also
+  // matches a send of the SAME contract+stage under a different expiry (약정 개월
+  // changed, degraded 개통+기본 개월 date, 유지일 vs 기본 개월) — audit 1-29/1-30.
+  const sentIdx = await history.sentIndex(cfg);
   for (const item of results) {
     item.id = dueKey(item.phone, item.expiry_date);
-    item.already_sent = sentKeys.has(item.id);
+    item.sent_state = sentIdx.stateOf(item);
+    item.already_sent = item.sent_state === "sent" || item.sent_state === "skipped";
   }
 
-  // unsent before sent, then by opendate ascending (mirror scan.py sort key).
-  results.sort((a, b) => {
-    if (a.already_sent !== b.already_sent) return a.already_sent ? 1 : -1;
-    return a.opendate < b.opendate ? -1 : a.opendate > b.opendate ? 1 : 0;
-  });
+  // unsent before sent, then most urgent first (expiry ascending: overdue on top) —
+  // the same order the UI re-applies after re-flagging (sortDueItems, audit 3-9).
+  const sorted = sortDueItems(results);
 
   // 미방문 고객: expired-but-not-returned, derived from the same widened fetch.
-  // 대표 만료(약정 대상=약정 24개월, 유심=요금제 유지 6개월)가 지난 최신 개통.
-  const unvisited = computeUnvisited(openRows, cfg, todayD, sentKeys);
+  // 대표 만료(약정 대상=약정 개월, 유심=폰클 유지일 또는 개통+기본 개월)가 지난 최신 개통.
+  const unvisited = computeUnvisited(openRows, cfg, todayD, sentIdx, pendingRows);
+  if (unreliable) {
+    // 유심 customers' 대표 만료 needs the 유지일; without it the date may be wrong.
+    for (const it of unvisited) if (it.source === "keepdate") it.degraded = true;
+  }
 
   // 재방문 전환율 코호트 갱신 (auxiliary; a degraded 미결 fetch gives an empty
-  // blacklist so the expired set is unreliable → skip. Never fail a scan over it).
-  if (!pendingDegraded) {
+  // blacklist so the expired set is unreliable → skip; so does a cut-off fetch, L4.
+  // Never fail a scan over it).
+  if (!unreliable) {
     try {
+      await history.migrateCohortInformed(); // one-shot: undo record-only 'informed' (L4)
+      // informed = a REAL sms (not failed); a skip / record-only isn't informing.
+      const cohortKeys = sentIdx.sentKeySet();
+      // (sentAt also matches the same contract+stage under a different expiry key.)
+      for (const it of unvisited) if (sentIdx.sentAt(it)) cohortKeys.add(it.id);
       const prevCohort = await history.loadCohort();
       await history.saveCohort(
-        updateCohort(prevCohort, unvisited, openRows, sentKeys, todayD, COHORT_WINDOW_DAYS),
+        updateCohort(
+          prevCohort, unvisited, openRows, cohortKeys, todayD, COHORT_WINDOW_DAYS, sentIdx.sentRecords(),
+          sentIdx.failedKeySet(), // a failed send no longer counts as 안내함 (L6)
+        ),
       );
     } catch {
       /* ignore cohort persistence errors */
     }
   }
 
-  const sent = results.filter((r) => r.already_sent).length;
+  const sent = sorted.filter((r) => r.already_sent).length;
   return {
     status: "ok",
     state: "idle",
-    results,
+    results: sorted,
     unvisited,
     pendingDegraded,
-    targets: results.length,
+    truncated: client.truncated,
+    catchUpCapped: catchUpCapped(opts.sinceDate ?? "", todayD),
+    targets: sorted.length,
     sent,
-    pending: results.length - sent,
+    pending: sorted.length - sent,
   };
 }

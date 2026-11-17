@@ -27,7 +27,7 @@ class PoncleClient:
         return {
             "start": start, "sort": "opendate", "by": "desc", "viewsum": 0,
             "sdate": sdate, "edate": edate, "openhow": "", "cond": "", "agency": "",
-            "member": "", "mgubun": "", "mmodel": "", "s": "customer-openphone",
+            "member": "", "mgubun": "", "mmodel": "", "s": "all",
             "q": "", "scale": scale,
         }
 

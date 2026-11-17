@@ -3,6 +3,7 @@ package com.poncleexpiry.app;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.net.Uri;
+import android.os.Build;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -30,6 +31,9 @@ public class AppUpdatePlugin extends Plugin {
         } catch (Exception e) {
             r.put("version", "");
         }
+        // Device API level: the updater skips a release whose notes declare a
+        // higher "minSdk: N" (audit B15 — an APK the phone cannot install).
+        r.put("sdkInt", Build.VERSION.SDK_INT);
         call.resolve(r);
     }
 

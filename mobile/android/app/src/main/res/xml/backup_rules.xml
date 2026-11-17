@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- fullBackupContent: used only on Android 11 and older (Android 12+ reads
+     data_extraction_rules.xml instead). While allowBackup="false" these rules are
+     inert - backup, device transfer and adb backup are all off on those versions.
+     They pre-set the same exclusions should allowBackup ever be flipped:
+     credentials, the persisted session cookies, the GeckoView profile
+     (files/mozilla/) and the old WebView data dir are never backed up. -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="poncle_creds.xml" />
+    <exclude domain="sharedpref" path="poncle_cookie.xml" />
+    <exclude domain="root" path="app_webview/" />
+    <exclude domain="file" path="mozilla/" />
+</full-backup-content>

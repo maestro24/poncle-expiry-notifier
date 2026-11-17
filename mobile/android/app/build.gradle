@@ -7,9 +7,17 @@ android {
         applicationId "com.poncleexpiry.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 29
-        versionName "1.2.16"
+        versionCode 30
+        versionName "1.2.17"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        // GeckoView ships a ~100 MB native engine per ABI. Only the two ARM ABIs
+        // real phones use are packaged (arm64-v8a: every current phone;
+        // armeabi-v7a: older 32-bit phones). x86/x86_64 (emulators, a few
+        // Chromebooks) are dropped to keep the self-update APK download small;
+        // the app will not install on an x86-only device.
+        ndk {
+            abiFilters 'arm64-v8a', 'armeabi-v7a'
+        }
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
@@ -18,8 +26,25 @@ android {
     }
     buildTypes {
         release {
+            // Signed with the SAME key as every previous (debug-built) release so it
+            // installs in place over them: the canonical ~/.android/debug.keystore
+            // (alias androiddebugkey, SHA-1 9B:7A:F8:97:...:BA:FE:23:F7, see
+            // RELEASING.md). Release = not debuggable, so no `run-as` access to app
+            // data and no Capacitor verbose logging of plugin args (customer
+            // phone/text) in logcat.
+            signingConfig signingConfigs.debug
+            debuggable false
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+    packaging {
+        jniLibs {
+            // Store GeckoView's native libraries COMPRESSED in the APK (extracted
+            // at install). The app self-updates by downloading the whole APK from
+            // GitHub Releases, so a much smaller download beats the slightly
+            // faster cold start of page-aligned uncompressed libraries.
+            useLegacyPackaging true
         }
     }
 }
@@ -38,7 +63,18 @@ dependencies {
     // At-rest encryption for the stored Poncle login credentials (autofill).
     implementation "androidx.security:security-crypto:1.1.0-alpha06"
     implementation project(':capacitor-android')
+    // Embedded Firefox engine for the Poncle login + authenticated requests
+    // (Android System WebView fails Poncle's reCAPTCHA v3 — procLogin result 8).
+    // 153 is the newest GeckoView that builds against the installed android-36
+    // platform: 154+ pull androidx.core 1.19.x (compileSdk 37 + AGP >= 9.1) and
+    // 159+ itself declares minCompileSdk 37.2. GeckoView 153 needs minSdk 26
+    // (variables.gradle). See RELEASING.md "GeckoView / toolchain" for the path
+    // to 159+. From maven.mozilla.org (see the root build.gradle).
+    implementation "org.mozilla.geckoview:geckoview:153.0.20260810162159"
     testImplementation "junit:junit:$junitVersion"
+    // Real org.json for JVM unit tests: android.jar only ships throwing stubs, and
+    // PoncleLoginActivity.parseLoginResult parses JSON (test classpath only).
+    testImplementation "org.json:json:20240303"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')

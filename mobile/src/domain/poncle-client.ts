@@ -5,7 +5,8 @@
  * bridge in the app, a fake in tests). Contract math lives in expiry.ts.
  */
 import { PlainDate, addMonths } from "./plaindate";
-import { parseOpendate } from "./expiry";
+import { isNewerOpenRow, parseOpendate } from "./expiry";
+import { normalizeKrMobile } from "./sender";
 import type { AppConfig, PoncleRow } from "./types";
 
 /** Poncle answered with the login page: the session is genuinely expired. */
@@ -27,6 +28,31 @@ export interface ListResult {
   total: number;
   list: PoncleRow[];
   netError?: boolean;
+  /** HTTP status the server answered with (native builds >= 1.2.17); absent when
+   *  no response arrived or on older builds. */
+  status?: number;
+  /** The server's HTTP `Date` header as an ISO-8601 UTC string (native builds
+   *  >= 1.2.17); absent when the response carried none / on older builds. Used to
+   *  detect a wrong device clock (improvement 3-16). */
+  serverDate?: string;
+}
+
+/** 고객 조회 result: the first page of matches plus the server's total count. */
+export interface CustomerSearchResult {
+  list: PoncleRow[];
+  /** Server total clamped to at least list.length (never reads lower than what was shown). */
+  total: number;
+  /** The server's own total, unclamped; 0 when missing/unparseable (audit L19). Lets
+   *  the UI tell "exactly page_size matches" from "a full page, total unknown". */
+  serverTotal?: number;
+}
+
+/** A server status that means "try again later", not "logged out": 5xx, 408
+ *  (request timeout) and 429 (rate limited). 401/403 and every other status are
+ *  NOT transient here — the caller decides what they mean (audit 1-18). */
+export function isTransientHttpStatus(status: number | undefined): boolean {
+  if (typeof status !== "number" || !Number.isFinite(status)) return false;
+  return status >= 500 || status === 408 || status === 429;
 }
 
 /** Authenticated GETs returning {ok,total,list,netError?}. Native plugin implements them. */
@@ -37,7 +63,27 @@ export interface PoncleGateway {
   listPending(params: Record<string, string>): Promise<ListResult>;
 }
 
+/** Optional knobs for PoncleClient (tests / callers that want the cap notice). */
+export interface PoncleClientOptions {
+  /** Override every paging loop's safety cap (default: 2000 open / 50 pending). */
+  maxPages?: number;
+  /** Called when a paging loop stops because it hit the safety cap while the
+   *  server still had full pages — i.e. the result may be incomplete. */
+  onTruncated?: (what: string, pages: number) => void;
+}
+
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Whether another page should be requested after one that returned `got` rows.
+ *  A parseable positive `total` is authoritative (`nextStart < total`); when the
+ *  server total is missing / unparseable (the native layer reads it as 0) a FULL
+ *  page means "there may be more" (improvement 3-7: an unparseable total used to
+ *  end the scan silently after the first page). An empty page always stops. */
+function hasMorePages(got: number, scale: number, nextStart: number, total: number): boolean {
+  if (got === 0) return false;
+  if (Number.isFinite(total) && total > 0) return nextStart < total;
+  return got >= scale;
+}
 
 function baseParams(
   start: number,
@@ -58,10 +104,36 @@ function baseParams(
     member: "",
     mgubun: "",
     mmodel: "",
-    s: "customer-openphone",
+    s: "all",
     q: "",
     scale: String(scale),
   };
+}
+
+/** Poncle's list search field (`s`) for a query. The list form currently offers
+ *  all / openphone / customer / … — the old "customer-openphone" value was
+ *  retired and an unknown `s` is silently ignored (the whole table comes back).
+ *  Phone-looking queries search the phone field with digits only; anything
+ *  else searches the customer name.
+ *
+ *  Poncle stores the domestic form (010…). A complete mobile number goes
+ *  through normalizeKrMobile (sender.ts — the one shared rule, also mirrored by
+ *  native SmsPlugin.normalizeNumber), so "+82 10-…", "+82 010-…" and "8210…"
+ *  all search as "010…" (audit L17). A partial number only has an explicit
+ *  "+82" country code rewritten with the same rule (+82 then 1 -> 01, +82 then 0
+ *  -> 0); a '+' number that is not +82 is foreign and is searched as typed. */
+export function searchFieldFor(query: string): { s: string; q: string } {
+  const q = query.trim();
+  const digits = q.replace(/[^0-9]/g, "");
+  const phoneLike = digits.length >= 3 && /^[0-9+\-\s().]+$/.test(q);
+  if (!phoneLike) return { s: "customer", q };
+  const full = normalizeKrMobile(q);
+  if (full) return { s: "openphone", q: full };
+  if (q.startsWith("+") && digits.startsWith("82")) {
+    const rest = digits.slice(2);
+    return { s: "openphone", q: rest.startsWith("0") ? rest : `0${rest}` };
+  }
+  return { s: "openphone", q: digits };
 }
 
 /** Query params for /pending/listPending filtered to 요금제유지 (gubun=2). */
@@ -93,21 +165,43 @@ export function rowKey(row: PoncleRow): string {
 }
 
 export class PoncleClient {
+  /** True once any fetch on this client stopped at a paging safety cap (results
+   *  possibly incomplete). Sticky for the client's lifetime (one client per scan). */
+  truncated = false;
+
   constructor(
     private gw: PoncleGateway,
     private config: AppConfig,
+    private opts: PoncleClientOptions = {},
   ) {}
 
-  /** Retry transport errors a few times with backoff; a genuine session-expired
-   *  (netError falsy) fails fast so the caller shows the re-login banner. */
+  private cap(fallback: number): number {
+    const n = this.opts.maxPages;
+    return typeof n === "number" && Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+  }
+
+  /** Record + report that a paging loop ran into its cap with more data pending. */
+  private noteTruncated(what: string, pages: number): void {
+    this.truncated = true;
+    console.warn(`[poncle] ${what}: stopped at the ${pages}-page safety cap; results may be incomplete`);
+    try {
+      this.opts.onTruncated?.(what, pages);
+    } catch {
+      // a notice callback must never break a scan
+    }
+  }
+
+  /** Retry transport errors and transient server statuses (5xx/408/429) a few
+   *  times with backoff; a genuine session-expired (no netError, non-transient
+   *  status) fails fast so the caller shows the re-login banner. */
   private async getWith(
-    call: (p: Record<string, string>) => Promise<{ ok: boolean; total: number; list: PoncleRow[]; netError?: boolean }>,
+    call: (p: Record<string, string>) => Promise<ListResult>,
     params: Record<string, string>,
   ): Promise<{ total: number; list: PoncleRow[] }> {
     for (let attempt = 0; ; attempt++) {
       const res = await call(params);
       if (res.ok) return { total: res.total, list: res.list };
-      if (!res.netError) {
+      if (!res.netError && !isTransientHttpStatus(res.status)) {
         throw new SessionExpired("list endpoint did not return data (session likely expired)");
       }
       if (attempt >= 2) throw new NetworkError("네트워크 오류로 스캔에 실패했습니다");
@@ -127,45 +221,65 @@ export class PoncleClient {
     const scale = 1000;
     const collected: PoncleRow[] = [];
     let start = 0;
-    const maxPages = 50; // safety cap
-    for (let i = 0; i < maxPages; i++) {
+    const maxPages = this.cap(50); // safety cap
+    for (let i = 0; ; i++) {
       const res = await this.getPending(pendingParams(start, scale));
       for (const r of res.list) collected.push(r);
       start += scale;
-      if (res.list.length < scale || start >= res.total) break;
+      // A short page is the last one (as before); a full page continues even when
+      // the total is unparseable.
+      if (res.list.length < scale || !hasMorePages(res.list.length, scale, start, res.total)) break;
+      if (i + 1 >= maxPages) {
+        this.noteTruncated("listPending", maxPages);
+        break;
+      }
     }
     return collected;
   }
 
   /** Look up the open row for a phone (to join type/telecom onto a 유지일 item).
-   *  Returns the latest-opendate match, or null when the customer has no open row. */
+   *  Returns the latest-opendate row whose phone matches exactly (digits only), or
+   *  null when none does. Never falls back to another customer's row: the server
+   *  search is fuzzy (partial phone match), and joining a different customer's row
+   *  would put B's name/model into A's SMS. */
   async fetchOpenByPhone(phone: string): Promise<PoncleRow | null> {
     const digits = phone.replace(/[^0-9]/g, "");
     if (!digits) return null;
     const params = baseParams(0, 5);
-    params.q = phone; // s=customer-openphone
+    Object.assign(params, searchFieldFor(digits)); // s=openphone, digits only
     const res = await this.get(params);
     const matches = res.list.filter(
       (r) => String(r["openphone"] ?? "").replace(/[^0-9]/g, "") === digits,
     );
-    const pool = matches.length ? matches : res.list;
-    // Latest opendate first ('yy-mm-dd' sorts lexically within the 2000s).
-    pool.sort((a, b) => String(b["opendate"] ?? "").localeCompare(String(a["opendate"] ?? "")));
-    return pool[0] ?? null;
+    // Latest 개통 by PARSED opendate (+ idx on a same-day tie) — the same rule as
+    // latestOpenByPhone (U1), never the raw 'yy-mm-dd' text.
+    return matches.reduce<PoncleRow | null>((best, r) => (!best || isNewerOpenRow(r, best) ? r : best), null);
   }
 
   /** Live customer search by name or phone for the 고객 조회 screen. The server
-   *  filters on `s=customer-openphone`, so one query matches both. Returns every
+   *  picks the phone or customer-name field (searchFieldFor). Returns every
    *  matching open row (a phone may have several 개통 over time); the caller groups
    *  by phone. Throws SessionExpired / NetworkError like the scan fetches. */
   async searchCustomers(query: string): Promise<PoncleRow[]> {
+    return (await this.searchCustomersWithTotal(query)).list;
+  }
+
+  /** searchCustomers plus the server's match count. Only the FIRST page (page_size
+   *  rows) is fetched, so when `total > list.length` the UI should say the result
+   *  was cut off and ask for a more specific query (improvement 3-12). The search
+   *  is field-specific (searchFieldFor: s=openphone for a number, s=customer for
+   *  a name — no longer the old 통합검색 that also matched staff names), so
+   *  `total` counts that field's matches only (audit L41). `total` is never lower than the
+   *  rows actually returned (a missing/unparseable server total reads as 0). */
+  async searchCustomersWithTotal(query: string): Promise<CustomerSearchResult> {
     const q = query.trim();
-    if (q.length < 2) return [];
+    if (q.length < 2) return { list: [], total: 0 };
     const scale = Math.max(1, int(this.config.page_size, 100));
     const params = baseParams(0, scale);
-    params.q = q;
+    Object.assign(params, searchFieldFor(q));
     const res = await this.get(params);
-    return res.list;
+    const total = Number.isFinite(res.total) && res.total > 0 ? res.total : 0;
+    return { list: res.list, total: Math.max(total, res.list.length), serverTotal: total };
   }
 
   /** Fetch every row whose opendate falls in [sdate, edate] via the server filter. */
@@ -180,12 +294,17 @@ export class PoncleClient {
     if (total > scale * 400) throw new FilterIneffective(total);
     for (const r of first.list) collected.set(rowKey(r), r);
     let start = scale;
-    const maxPages = 2000; // absolute safety cap (mirror fetchRecent)
-    for (let i = 0; i < maxPages && start < total; i++) {
+    let more = hasMorePages(first.list.length, scale, start, total);
+    const maxPages = this.cap(2000); // absolute safety cap (mirror fetchRecent)
+    for (let pages = 1; more; pages++) {
+      if (pages >= maxPages) {
+        this.noteTruncated("listOpen(range)", maxPages);
+        break;
+      }
       const pg = await this.get(baseParams(start, scale, sdate, edate));
       for (const r of pg.list) collected.set(rowKey(r), r);
-      if (pg.list.length === 0) break;
       start += scale;
+      more = hasMorePages(pg.list.length, scale, start, total);
     }
     return Array.from(collected.values());
   }
@@ -199,8 +318,8 @@ export class PoncleClient {
 
     const collected = new Map<string, PoncleRow>();
     let start = 0;
-    const maxPages = 2000; // absolute safety cap
-    for (let i = 0; i < maxPages; i++) {
+    const maxPages = this.cap(2000); // absolute safety cap
+    for (let i = 0; ; i++) {
       const pg = await this.get(baseParams(start, scale));
       const rows = pg.list;
       if (rows.length === 0) break;
@@ -215,7 +334,11 @@ export class PoncleClient {
       }
       if (passedFloor) break; // desc-sorted: nothing older matters
       start += scale;
-      if (start >= pg.total) break;
+      if (!hasMorePages(rows.length, scale, start, pg.total)) break;
+      if (i + 1 >= maxPages) {
+        this.noteTruncated("listOpen(full)", maxPages);
+        break;
+      }
     }
     return Array.from(collected.values());
   }

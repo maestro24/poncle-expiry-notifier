@@ -140,7 +140,7 @@ def _probe_params() -> dict[str, Any]:
     return {
         "start": "", "sort": "opendate", "by": "desc", "viewsum": 0,
         "sdate": "", "edate": "", "openhow": "", "cond": "", "agency": "",
-        "member": "", "mgubun": "", "mmodel": "", "s": "customer-openphone",
+        "member": "", "mgubun": "", "mmodel": "", "s": "all",
         "q": "", "scale": 1,
     }
 

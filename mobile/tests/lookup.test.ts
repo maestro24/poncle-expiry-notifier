@@ -65,9 +65,9 @@ describe("buildLookupResults", () => {
     expect(byPhone["010-1111-2222"].informedAt).toBe("");
     expect(byPhone["010-7777-8888"].status.label).toBe("무약정");
     expect(byPhone["010-7777-8888"].expiry_date).toBe("");
-    // offsetDays = days until expiry (>=0); 무약정 -> 0
+    // offsetDays = signed days until expiry; 무약정 -> 0
     expect(byPhone["010-1111-2222"].offsetDays).toBe(17); // 2026-07-20 - 2026-07-03
-    expect(byPhone["010-3333-4444"].offsetDays).toBe(0); // expired -> clamped to 0
+    expect(byPhone["010-3333-4444"].offsetDays).toBe(-63); // expired 2026-05-01 -> D+63 (not clamped to 오늘)
     expect(byPhone["010-7777-8888"].offsetDays).toBe(0); // 무약정
   });
 

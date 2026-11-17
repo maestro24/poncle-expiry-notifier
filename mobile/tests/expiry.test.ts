@@ -142,9 +142,11 @@ describe("scanOpenDateBounds (미방문 look-back)", () => {
   it("due-only candidateOpenDateBounds is unchanged — upper stays in the past", () => {
     expect(candidateOpenDateBounds(cfg(), today).edate < "2026-07-03").toBe(true);
   });
-  it("lookback 0 disables widening -> equals the due-only bounds", () => {
+  it("lookback 0 keeps the due-only LOWER bound but still reaches today (re-contracts, audit 1-15)", () => {
     const c = cfg({ unvisited_lookback_months: 0 });
-    expect(scanOpenDateBounds(c, today)).toEqual(candidateOpenDateBounds(c, today));
+    const b = scanOpenDateBounds(c, today);
+    expect(b.sdate).toBe(candidateOpenDateBounds(c, today).sdate);
+    expect(b.edate >= "2026-07-03").toBe(true);
   });
   it("unvisitedFloor is today minus the configured months", () => {
     expect(toIso(unvisitedFloor(cfg(), today))).toBe("2026-01-03");

@@ -20,7 +20,9 @@ import {
   addMonths,
   daysBetween,
   makeDate,
+  parseIso,
   toIso,
+  today as todayLocal,
 } from "./plaindate";
 import { isContractType } from "./template-match";
 import type { AppConfig, PoncleRow } from "./types";
@@ -159,13 +161,108 @@ export function milestoneDue(
   months: number,
   config: AppConfig,
   todayD: PlainDate,
+  catchUpDays = 0,
 ): [number, PlainDate] | null {
   const open = parseOpendate(openIso);
   if (open === null || months <= 0) return null;
   const date = addMonths(open, months);
-  const days = daysBetween(date, todayD); // date - today
-  if (days < 0 || days > lookAheadDays(config)) return null;
+  const days = daysBetween(date, todayD); // date - today (negative = passed, D+N)
+  if (days < -clampCatchUp(catchUpDays) || days > lookAheadDays(config)) return null;
   return [days, date];
+}
+
+/** Longest catch-up (days) for milestones that passed while the app wasn't scanned. */
+export const CATCH_UP_MAX_DAYS = 14;
+
+function clampCatchUp(n: number): number {
+  return Number.isFinite(n) ? Math.min(CATCH_UP_MAX_DAYS, Math.max(0, Math.floor(n))) : 0;
+}
+
+/**
+ * Days of passed milestones to re-surface (audit 1-4): from the LAST SUCCESSFUL
+ * scan date (inclusive — an unsent milestone shown that day is re-offered) up to
+ * today, capped at CATCH_UP_MAX_DAYS. "" / invalid / a future date -> 0 (no
+ * catch-up, the classic behavior).
+ */
+export function catchUpDaysSince(lastScanIso: string, todayD: PlainDate): number {
+  const last = parseIso(lastScanIso);
+  if (!last) return 0;
+  return clampCatchUp(daysBetween(todayD, last));
+}
+
+/**
+ * The catch-up anchor for the next scan's `sinceDate`: the last NON-degraded
+ * successful scan. A degraded scan (미결 fetch failed) is missing Pass A and blocks
+ * Pass B sends, so it must not move the anchor — otherwise milestones that passed
+ * during consecutive degraded days are lost. Before the clean date was recorded
+ * (pre-upgrade) fall back to the last scan's date.
+ */
+export function catchUpAnchor(
+  lastCleanScanIso: string,
+  lastScanIso: string,
+  legacyLastScanLabel = "",
+  todayD: PlainDate = todayLocal(),
+): string {
+  if (lastCleanScanIso || lastScanIso) return lastCleanScanIso || lastScanIso;
+  // Upgrade from v1.2.16 (I1): neither ISO date was stored then, only the display
+  // label last_scan_at ('M/D HH:MM'). Use its day; an unreadable label still proves
+  // a scan happened, so take the full catch-up window. Never scanned -> no catch-up.
+  const label = String(legacyLastScanLabel ?? "").trim();
+  if (!label) return "";
+  const legacy = parseLegacyScanLabel(label, todayD);
+  return toIso(legacy ?? addDays(todayD, -CATCH_UP_MAX_DAYS));
+}
+
+/** The day of a v1.2.16 'M/D HH:MM' last-scan label: this year, or last year when
+ *  that day is still ahead of `todayD` (a 12/30 label read on 1/5). null if invalid. */
+function parseLegacyScanLabel(label: string, todayD: PlainDate): PlainDate | null {
+  const m = /^(\d{1,2})\/(\d{1,2})(?:\s|$)/.exec(label);
+  if (!m) return null;
+  const [mo, d] = [Number(m[1]), Number(m[2])];
+  const valid = (y: number): PlainDate | null => {
+    const dt = makeDate(y, mo, d);
+    return dt.getFullYear() === y && dt.getMonth() === mo - 1 && dt.getDate() === d ? dt : null;
+  };
+  const thisYear = valid(todayD.getFullYear());
+  if (thisYear && daysBetween(thisYear, todayD) <= 0) return thisYear;
+  // In the future this year (or 2/29 in a common year): it was last year's.
+  return valid(todayD.getFullYear() - 1);
+}
+
+/**
+ * True when the catch-up anchor is older than CATCH_UP_MAX_DAYS, so milestones that
+ * passed before the cap were NOT re-surfaced (I3: the home tells the staff to check
+ * the 미방문 list). Also true while 미결 조회 keeps degrading, since the clean anchor
+ * does not move then. "" / invalid / future -> false.
+ */
+export function catchUpCapped(lastScanIso: string, todayD: PlainDate): boolean {
+  const last = parseIso(lastScanIso);
+  return !!last && daysBetween(todayD, last) > CATCH_UP_MAX_DAYS;
+}
+
+/**
+ * True when open row `a` is a NEWER 개통 than `b` (U1): compares the PARSED opendate
+ * (Poncle's 'yy-mm-dd', tolerating 'yyyy-mm-dd'), never the raw text, so mixed formats
+ * order correctly. A parseable date beats an unparseable one; on the same day the
+ * higher numeric Poncle idx (the later registration) wins; otherwise false, so the
+ * first-seen row is kept. Order-independent whenever the rows differ in date or idx.
+ */
+export function isNewerOpenRow(a: PoncleRow, b: PoncleRow): boolean {
+  const da = parseOpendate(String(a["opendate"] ?? ""));
+  const db = parseOpendate(String(b["opendate"] ?? ""));
+  if (!da || !db) return !!da && !db;
+  const diff = daysBetween(da, db);
+  if (diff !== 0) return diff > 0;
+  const ia = rowIdx(a);
+  const ib = rowIdx(b);
+  return ia !== null && (ib === null || ia > ib);
+}
+
+function rowIdx(row: PoncleRow): number | null {
+  const s = String(row["idx"] ?? "").trim();
+  if (!/^\d+$/.test(s)) return null;
+  const n = Number(s);
+  return Number.isSafeInteger(n) ? n : null;
 }
 
 /**
@@ -181,6 +278,8 @@ function openDateBounds(
   config: AppConfig,
   todayD: PlainDate,
   extraLookbackMonths: number,
+  extendToToday: boolean,
+  catchUpDays = 0,
 ): { sdate: string; edate: string } {
   const terms = positiveTerms(config);
   const maxTerm = terms.length ? Math.max(...terms) : 1;
@@ -188,14 +287,15 @@ function openDateBounds(
   const window = lookAheadDays(config);
   const buffer = Math.max(0, toInt(config.date_window_days, 3));
   const extra = Math.max(0, extraLookbackMonths);
-  // expiry = today - extra -> opendate = today - term - extra (oldest we still fetch)
-  const minOpen = addDays(addMonths(todayD, -maxTerm - extra), -buffer);
+  // expiry = today - extra - catchUp -> opendate = that - term (oldest we still fetch)
+  const minOpen = addDays(addMonths(todayD, -maxTerm - extra), -buffer - clampCatchUp(catchUpDays));
   // Due upper: newest opendate whose expiry reaches the window edge (usually months
-  // in the PAST). But when 미방문 tracking is on (extra > 0) we must ALSO fetch
-  // re-activation rows — a returning customer's new 개통 has opendate up to today —
-  // so latestOpenByPhone sees the return and auto-clears them. Extend to today.
+  // in the PAST). A scan must ALSO fetch re-activation rows — a returning customer's
+  // new 개통 has opendate up to today — so latestOpenByPhone sees the newer contract
+  // (auto-clears 미방문, and never surfaces the OLD contract's 만료 on home). Always
+  // extend to today for a scan, regardless of the 미방문 look-back (audit 1-15).
   const dueUpper = addMonths(addDays(todayD, window), -minTerm);
-  const upper = extra > 0 && dueUpper.getTime() < todayD.getTime() ? todayD : dueUpper;
+  const upper = extendToToday && dueUpper.getTime() < todayD.getTime() ? todayD : dueUpper;
   const maxOpen = addDays(upper, buffer);
   return { sdate: toIso(minOpen), edate: toIso(maxOpen) };
 }
@@ -205,19 +305,21 @@ export function candidateOpenDateBounds(
   config: AppConfig,
   todayD: PlainDate,
 ): { sdate: string; edate: string } {
-  return openDateBounds(config, todayD, 0);
+  return openDateBounds(config, todayD, 0, false);
 }
 
 /**
  * Bounds for a full scan that also covers recently-expired customers, so the
  * same fetch feeds both the due list and the 미방문 list. Extends the lower
- * bound back by unvisited_lookback_months.
+ * bound back by unvisited_lookback_months (+ `catchUpDays` of passed milestones),
+ * and the upper bound always to today (re-contract rows).
  */
 export function scanOpenDateBounds(
   config: AppConfig,
   todayD: PlainDate,
+  catchUpDays = 0,
 ): { sdate: string; edate: string } {
-  return openDateBounds(config, todayD, unvisitedLookbackMonths(config));
+  return openDateBounds(config, todayD, unvisitedLookbackMonths(config), true, catchUpDays);
 }
 
 /** Configured 미방문 tracking horizon in months (>= 0). */
@@ -230,9 +332,12 @@ export function unvisitedFloor(config: AppConfig, todayD: PlainDate): PlainDate 
   return addMonths(todayD, -unvisitedLookbackMonths(config));
 }
 
-/** Human phrase for the alert text, e.g. '오늘 2026-06-15' / 'D-7 (2026-06-15)'. */
+/** Human phrase for the alert text, from the signed days until expiry
+ *  (expiry - today): '오늘 2026-06-15' / 'D-7 (2026-06-15)' / 'D+3 (2026-06-15)'
+ *  once passed (never a misleading 'D-3' for an already-expired customer). */
 export function formatWhen(offsetDays: number, expiry: PlainDate): string {
   const iso = toIso(expiry);
   if (offsetDays === 0) return `오늘 ${iso}`;
+  if (offsetDays < 0) return `D+${-offsetDays} (${iso})`;
   return `D-${offsetDays} (${iso})`;
 }

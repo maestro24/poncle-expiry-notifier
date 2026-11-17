@@ -359,14 +359,22 @@ describe("sendAlert", () => {
     expect(res.status).toBe("sent");
     expect(res.channel).toBe("record-only");
     expect(sendSms).not.toHaveBeenCalled();
-    // second send is deduped
-    expect((await sendAlert(item, cfg({ deliver_alerts: false }), { history, sendSms, nowIso }, "본문")).status).toBe("already");
+    // A practice record is NOT a send (audit 1-2): turning delivery on later must
+    // really send to this customer and upgrade the record to sms (one row).
+    const real = vi.fn(async () => undefined);
+    const res2 = await sendAlert(item, cfg({ deliver_alerts: true }), { history, sendSms: real, nowIso }, "본문");
+    expect(res2).toEqual({ status: "sent", channel: "sms" });
+    expect(real).toHaveBeenCalledTimes(1);
+    expect((await history.exportAll()).map((r) => r.channel)).toEqual(["sms"]);
+    // ...and a real send IS deduped
+    expect((await sendAlert(item, cfg({ deliver_alerts: true }), { history, sendSms: real, nowIso }, "본문")).status).toBe("already");
   });
 
   it("deliver on: sends the resolved body and records channel sms", async () => {
     const history = new History(memKV());
     const sendSms = vi.fn(async () => undefined);
-    const body = renderTemplate(item, "{customer}/{telecom}/{expiry}/{when}");
+    // {when} is derived from expiry vs the render day (injected = the expiry day)
+    const body = renderTemplate(item, "{customer}/{telecom}/{expiry}/{when}", makeDate(2026, 7, 3));
     expect(body).toBe("홍길동/SK텔레콤/2026-07-03/오늘 2026-07-03");
     const res = await sendAlert(item, cfg({ deliver_alerts: true }), { history, sendSms, nowIso }, body);
     expect(res.status).toBe("sent");
@@ -381,8 +389,10 @@ describe("sendAlert", () => {
     expect(renderTemplate({ ...item, opendate: "24-11-05" }, "{years}", makeDate(2026, 7, 5))).toBe("2");
     // 17 months (1년 5개월) -> rounds DOWN to 1 year
     expect(renderTemplate({ ...item, opendate: "25-02-05" }, "{years}", makeDate(2026, 7, 5))).toBe("1");
-    // blank/future opendate (elapsed 0) floors to 1 -> never "0개월 전 / 0년전"
-    expect(renderTemplate({ ...item, opendate: "" }, "{months}/{years}", makeDate(2026, 7, 5))).toBe("1/1");
+    // future opendate (elapsed 0) floors to 1 -> never "0개월 전 / 0년전"
+    expect(renderTemplate({ ...item, opendate: "26-07-04" }, "{months}/{years}", makeDate(2026, 7, 5))).toBe("1/1");
+    // unknown opendate: a visible marker, never a false "1개월 전" (audit 1-33)
+    expect(renderTemplate({ ...item, opendate: "" }, "{months}/{years}", makeDate(2026, 7, 5))).toBe("(개통일 확인 필요)/(개통일 확인 필요)");
   });
 
   it("deliver on: SMS failure -> error, not recorded", async () => {
